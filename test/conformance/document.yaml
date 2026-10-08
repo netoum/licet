@@ -1,0 +1,13 @@
+schema: |
+  definition user {}
+  definition document {
+    relation viewer: user
+    permission view = viewer
+  }
+relationships: |
+  document:1#viewer@user:anne
+assertions:
+  assertTrue:
+    - document:1#view@user:anne
+  assertFalse:
+    - document:1#view@user:bob

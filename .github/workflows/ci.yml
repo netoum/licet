@@ -1,0 +1,177 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+    env:
+      MIX_ENV: test
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.19.5"
+          otp-version: "28.3"
+
+      - name: Restore dependencies cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            deps
+            _build
+          key: deps-${{ runner.os }}-28.3-1.19.5-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            deps-${{ runner.os }}-28.3-1.19.5
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: mix format
+        run: mix format --check-formatted
+
+      - name: mix compile
+        run: mix compile --warnings-as-errors
+
+      - name: mix credo
+        run: mix credo --strict
+
+      - name: mix docs
+        env:
+          MIX_ENV: dev
+        run: mix deps.get && mix docs --warnings-as-errors
+
+      - name: mix hex.build
+        run: mix hex.build
+
+  unit-tests:
+    name: Unit tests (OTP ${{ matrix.otp }} | Elixir ${{ matrix.elixir }} | Postgres ${{ matrix.postgres }})
+    runs-on: ubuntu-24.04
+    env:
+      MIX_ENV: test
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: licet_test
+      PGPORT: 5432
+    strategy:
+      matrix:
+        include:
+          - elixir: "1.17"
+            otp: "27"
+            postgres: "15"
+          - elixir: "1.19.5"
+            otp: "28.3"
+            postgres: "18"
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: licet_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d licet_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ matrix.elixir }}
+          otp-version: ${{ matrix.otp }}
+
+      - name: Restore dependencies cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            deps
+            _build
+          key: deps-${{ runner.os }}-${{ matrix.otp }}-${{ matrix.elixir }}-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            deps-${{ runner.os }}-${{ matrix.otp }}-${{ matrix.elixir }}
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: mix test
+        run: mix test --cover
+
+  dialyzer:
+    name: Dialyzer
+    runs-on: ubuntu-24.04
+    env:
+      MIX_ENV: dev
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.19.5"
+          otp-version: "28.3"
+
+      - name: Restore PLT cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            deps
+            _build
+            priv/plts
+          key: plt-${{ runner.os }}-28.3-1.19.5-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            plt-${{ runner.os }}-28.3-1.19.5
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: mix dialyzer
+        run: mix dialyzer
+
+  differential:
+    name: SpiceDB differential
+    runs-on: ubuntu-24.04
+    env:
+      MIX_ENV: test
+      LICET_SPICEDB: "1"
+      LICET_DIFFERENTIAL_CASES: "10000"
+      LICET_SPICEDB_URL: http://127.0.0.1:8443
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.19.5"
+          otp-version: "28.3"
+
+      - name: Start SpiceDB
+        run: |
+          docker run -d --name licet-spicedb -p 8443:8443 authzed/spicedb:latest \
+            serve --datastore-engine memory --http-enabled --grpc-preshared-key test
+          for _ in $(seq 1 30); do
+            curl -sf -o /dev/null http://127.0.0.1:8443/healthz && exit 0
+            sleep 2
+          done
+          docker logs licet-spicedb
+          exit 1
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Differential cases
+        run: mix test test/licet/validate_test.exs --only spicedb --include spicedb

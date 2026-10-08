@@ -1,0 +1,14 @@
+/_build/
+/cover/
+/deps/
+/doc/
+/tmp/
+erl_crash.dump
+*.ez
+licet-*.tar
+/priv/plts/
+.elixir_ls/
+.fetch
+examples/blog/deps/
+examples/blog/_build/
+examples/blog/cover/
