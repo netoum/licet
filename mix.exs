@@ -26,8 +26,8 @@ defmodule Licet.MixProject do
           Licet.Differential,
           Licet.Conformance,
           Licet.SpiceDB,
-          Licet.SlowReader,
-          Licet.Reader.Licet.SlowReader
+          Licet.CountingReader,
+          Licet.Reader.Licet.CountingReader
         ]
       ],
       aliases: aliases()

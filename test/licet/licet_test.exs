@@ -1,6 +1,8 @@
 defmodule LicetTest do
   use Licet.DataCase, async: false
 
+  alias Ecto.Adapters.SQL.Sandbox
+
   @schema """
   use expiration
   definition user {}
@@ -230,7 +232,7 @@ defmodule LicetTest do
     name =
       Module.concat(Licet.Outside, "I" <> Integer.to_string(System.unique_integer([:positive])))
 
-    Ecto.Adapters.SQL.Sandbox.unboxed_run(Licet.TestRepo, fn ->
+    Sandbox.unboxed_run(Licet.TestRepo, fn ->
       Licet.Testing.migrate!(Licet.TestRepo, prefix)
 
       start_supervised!(
@@ -285,7 +287,7 @@ defmodule LicetTest do
     name =
       Module.concat(Licet.Rollback, "I" <> Integer.to_string(System.unique_integer([:positive])))
 
-    Ecto.Adapters.SQL.Sandbox.unboxed_run(Licet.TestRepo, fn ->
+    Sandbox.unboxed_run(Licet.TestRepo, fn ->
       Licet.Testing.migrate!(Licet.TestRepo, prefix)
 
       start_supervised!(
@@ -382,7 +384,7 @@ defmodule LicetTest do
     name =
       Module.concat(Licet.Edges, "I" <> Integer.to_string(System.unique_integer([:positive])))
 
-    Ecto.Adapters.SQL.Sandbox.unboxed_run(Licet.TestRepo, fn ->
+    Sandbox.unboxed_run(Licet.TestRepo, fn ->
       Licet.Testing.migrate!(Licet.TestRepo, prefix)
 
       start_supervised!(
@@ -421,7 +423,7 @@ defmodule LicetTest do
 
       task =
         Task.async(fn ->
-          Ecto.Adapters.SQL.Sandbox.checkout(Licet.TestRepo, sandbox: false)
+          Sandbox.checkout(Licet.TestRepo, sandbox: false)
 
           Licet.TestRepo.transaction(fn ->
             {:ok, open} = Licet.write(name, [{:create, "document:9#owner@user:ada"}])
