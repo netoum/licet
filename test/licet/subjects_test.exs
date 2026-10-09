@@ -5,12 +5,14 @@ defmodule Licet.SubjectsTest do
   alias Licet.Reader.Memory
   alias Licet.Reader.Postgres
   alias Licet.Relationship
+  alias Licet.Validate
 
   test "default struct builders run" do
     assert %Subjects{} = Subjects.__struct__(sets: %{})
     assert %Memory{tuples: []} = Memory.__struct__(tuples: [])
     assert %Postgres{} = Postgres.__struct__([])
     assert %Relationship{} = Relationship.__struct__([])
+    assert %Validate{relationships: []} = Validate.__struct__([])
   end
 
   defp set(ids), do: Enum.reduce(ids, Subjects.empty(), &Subjects.add(&2, "user", &1))
