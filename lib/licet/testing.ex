@@ -32,9 +32,8 @@ defmodule Licet.Testing do
   @doc """
   Lets `pid` use the sandbox connection owned by `parent`.
 
-  Call it when a process started by the test calls Licet. Licet already does
-  this for the processes it starts itself. It does nothing when `repo` doesn't
-  use the sandbox pool.
+  Call it when a process started by the test calls Licet. It does nothing when
+  `repo` doesn't use the sandbox pool.
 
   ## Examples
 

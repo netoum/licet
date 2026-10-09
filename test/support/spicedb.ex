@@ -1,8 +1,8 @@
 defmodule Licet.SpiceDB do
   @moduledoc """
   A small client for SpiceDB's HTTP API, used to compare Licet with a live
-  server. It speaks the JSON gateway of the `v1` API with a preshared key and
-  reads every answer at full consistency.
+  server. It speaks the JSON gateway of the `v1` API with a preshared key.
+  Reads take a consistency of `:full` (the default) or `:minimize_latency`.
   """
 
   alias Licet.Relationship
@@ -10,7 +10,8 @@ defmodule Licet.SpiceDB do
   @key "test"
   @write_chunk 1000
   @check_chunk 500
-  @full %{"fullyConsistent" => true}
+
+  @type consistency :: :full | :minimize_latency
 
   @doc "The server URL, from `LICET_SPICEDB_URL`."
   @spec url() :: String.t()
@@ -32,11 +33,19 @@ defmodule Licet.SpiceDB do
 
   @doc "Touches `relationships`, in chunks the server accepts."
   @spec write(String.t(), [Relationship.t()]) :: :ok | {:error, term()}
-  def write(url, relationships) do
+  def write(url, relationships), do: update(url, relationships, "OPERATION_TOUCH")
+
+  @doc "Deletes `relationships`, in chunks the server accepts."
+  @spec delete(String.t(), [Relationship.t()]) :: :ok | {:error, term()}
+  def delete(url, relationships), do: update(url, relationships, "OPERATION_DELETE")
+
+  defp update(url, relationships, operation) do
     relationships
     |> Enum.chunk_every(@write_chunk)
     |> Enum.reduce_while(:ok, fn chunk, :ok ->
-      case post(url, "/v1/relationships/write", %{"updates" => Enum.map(chunk, &touch/1)}) do
+      updates = Enum.map(chunk, &%{"operation" => operation, "relationship" => relationship(&1)})
+
+      case post(url, "/v1/relationships/write", %{"updates" => updates}) do
         :ok -> {:cont, :ok}
         error -> {:halt, error}
       end
@@ -44,13 +53,34 @@ defmodule Licet.SpiceDB do
   end
 
   @doc """
-  Checks every `{resource, permission, subject}` request. Objects are
-  `{type, id}` and subjects `{type, id, relation}`. Answers are `{:ok, boolean}`
-  or `{:error, message}`, in request order.
+  Checks whether `subject` has `permission` on `resource`. Objects are
+  `{type, id}` and subjects `{type, id, relation}`.
   """
-  @spec check_bulk(String.t(), [{{String.t(), String.t()}, String.t(), tuple()}]) ::
+  @spec check(String.t(), {String.t(), String.t()}, String.t(), tuple(), consistency()) ::
+          {:ok, boolean()} | {:error, term()}
+  def check(url, resource, permission, subject, consistency \\ :full) do
+    body = %{
+      "consistency" => consistency(consistency),
+      "resource" => object(resource),
+      "permission" => permission,
+      "subject" => subject(subject)
+    }
+
+    case request(url, "/v1/permissions/check", body) do
+      {:ok, %{"permissionship" => "PERMISSIONSHIP_HAS_PERMISSION"}} -> {:ok, true}
+      {:ok, %{"permissionship" => "PERMISSIONSHIP_NO_PERMISSION"}} -> {:ok, false}
+      {:ok, body} -> {:error, body}
+      error -> error
+    end
+  end
+
+  @doc """
+  Checks every `{resource, permission, subject}` request, as in `check/5`.
+  Answers are `{:ok, boolean}` or `{:error, message}`, in request order.
+  """
+  @spec check_bulk(String.t(), [{{String.t(), String.t()}, String.t(), tuple()}], consistency()) ::
           {:ok, [{:ok, boolean()} | {:error, String.t()}]} | {:error, term()}
-  def check_bulk(url, requests) do
+  def check_bulk(url, requests, consistency \\ :full) do
     requests
     |> Enum.chunk_every(@check_chunk)
     |> Enum.reduce_while({:ok, []}, fn chunk, {:ok, acc} ->
@@ -63,7 +93,9 @@ defmodule Licet.SpiceDB do
           }
         end)
 
-      case request(url, "/v1/permissions/checkbulk", %{"consistency" => @full, "items" => items}) do
+      body = %{"consistency" => consistency(consistency), "items" => items}
+
+      case request(url, "/v1/permissions/checkbulk", body) do
         {:ok, %{"pairs" => pairs}} -> {:cont, {:ok, acc ++ Enum.map(pairs, &pair/1)}}
         error -> {:halt, error}
       end
@@ -71,11 +103,11 @@ defmodule Licet.SpiceDB do
   end
 
   @doc "The ids of `type` on which `subject` has `permission`."
-  @spec lookup_resources(String.t(), String.t(), String.t(), tuple()) ::
+  @spec lookup_resources(String.t(), String.t(), String.t(), tuple(), consistency()) ::
           {:ok, MapSet.t()} | {:error, term()}
-  def lookup_resources(url, type, permission, subject) do
+  def lookup_resources(url, type, permission, subject, consistency \\ :full) do
     body = %{
-      "consistency" => @full,
+      "consistency" => consistency(consistency),
       "resourceObjectType" => type,
       "permission" => permission,
       "subject" => subject(subject)
@@ -95,7 +127,7 @@ defmodule Licet.SpiceDB do
           {:ok, %{String.t() => [String.t()]}} | {:error, term()}
   def lookup_subjects(url, resource, permission, subject_type, subject_relation) do
     body = %{
-      "consistency" => @full,
+      "consistency" => consistency(:full),
       "resource" => object(resource),
       "permission" => permission,
       "subjectObjectType" => subject_type,
@@ -135,21 +167,21 @@ defmodule Licet.SpiceDB do
     end
   end
 
-  defp touch(%Relationship{} = rel) do
+  defp relationship(%Relationship{} = rel) do
     relationship = %{
       "resource" => object({rel.resource_type, rel.resource_id}),
       "relation" => rel.relation,
       "subject" => subject({rel.subject_type, rel.subject_id, rel.subject_relation})
     }
 
-    relationship =
-      case rel.expires_at do
-        nil -> relationship
-        at -> Map.put(relationship, "optionalExpiresAt", DateTime.to_iso8601(at))
-      end
-
-    %{"operation" => "OPERATION_TOUCH", "relationship" => relationship}
+    case rel.expires_at do
+      nil -> relationship
+      at -> Map.put(relationship, "optionalExpiresAt", DateTime.to_iso8601(at))
+    end
   end
+
+  defp consistency(:full), do: %{"fullyConsistent" => true}
+  defp consistency(:minimize_latency), do: %{"minimizeLatency" => true}
 
   defp object({type, id}), do: %{"objectType" => type, "objectId" => id}
 

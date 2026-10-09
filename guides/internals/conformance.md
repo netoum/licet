@@ -20,8 +20,6 @@ Each runnable file runs three ways:
 
 `test/licet/new_enemy_test.exs` ports the token test from SpiceDB's `e2e/newenemy` and runs it on Postgres. With `permission allowed = direct - excluded`, it writes the exclusion, then the grant, keeping both tokens. A check `{:exact, token}` at either token must deny. After the exclusion is deleted, the old tokens still deny and the newer token allows.
 
-The test found a real bug: the check cache was keyed on the snapshot text alone, and a write's recorded snapshot can equal an autocommit snapshot taken just before the write. Cache keys now carry the whole revision.
-
 ## Differential testing against a live SpiceDB
 
 Tests tagged `:spicedb` run Licet and a live SpiceDB side by side, through SpiceDB's HTTP API. They are excluded by default.

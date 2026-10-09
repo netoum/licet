@@ -20,7 +20,7 @@ defmodule Licet.Conformance do
   alias Licet.Reader.Memory
   alias Licet.Relationship
 
-  @opts [timeout: 30_000, parallel: nil]
+  @opts [timeout: 30_000]
 
   @dir "test/conformance/spicedb"
   @caveats "caveats are not supported"

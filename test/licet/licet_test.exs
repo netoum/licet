@@ -148,6 +148,54 @@ defmodule LicetTest do
              ])
   end
 
+  test "check_bulk groups checks and keeps each answer and error in place" do
+    name = start_licet!(@schema)
+
+    assert {:ok, token} =
+             Licet.write(name, [
+               {:touch, "document:1#owner@user:ada"},
+               {:touch, "document:2#parent@document:1"},
+               {:touch, "document:3#viewer@team:eng#member"},
+               {:touch, "team:eng#member@user:bob"}
+             ])
+
+    checks = [
+      %{resource: "document:1", permission: "view", subject: "user:ada"},
+      %{resource: "document:2", permission: "view", subject: "user:ada"},
+      %{resource: "document:3", permission: "view", subject: "user:ada"},
+      %{resource: "document:3", permission: "view", subject: "user:bob"},
+      %{resource: "team:eng", permission: "member", subject: "user:bob"},
+      %{resource: "document:1", permission: "missing", subject: "user:ada"},
+      %{resource: "document:*", permission: "view", subject: "user:ada"},
+      %{resource: "document:1", permission: "view", subject: "not a subject"},
+      %{resource: "document:1", permission: "view", subject: "user:ada"}
+    ]
+
+    expected = [
+      {:ok, :allowed},
+      {:ok, :allowed},
+      {:ok, :denied},
+      {:ok, :allowed},
+      {:ok, :allowed},
+      {:error, %Licet.Error{reason: :unknown_relation}},
+      {:error, %Licet.Error{reason: :invalid_relationship}},
+      {:error, %Licet.Error{reason: :invalid_relationship}},
+      {:ok, :allowed}
+    ]
+
+    for consistency <- [{:at_least, token}, :full] do
+      assert {:ok, results} = Licet.check_bulk(name, checks, consistency: consistency)
+      assert length(results) == length(expected)
+
+      for {result, want} <- Enum.zip(results, expected) do
+        case want do
+          {:ok, answer} -> assert result == {:ok, answer}
+          {:error, %{reason: reason}} -> assert {:error, %{reason: ^reason}} = result
+        end
+      end
+    end
+  end
+
   test "a failed write in the caller's transaction returns its error and undoes only itself" do
     name = start_licet!(@schema)
     assert {:ok, _token} = Licet.write(name, [{:create, "document:5#owner@user:ada"}])
@@ -211,6 +259,18 @@ defmodule LicetTest do
       assert :ok = GenServer.call(Licet.Revision.name(name), :refresh)
       assert {:ok, :allowed} = Licet.check(name, "document:8", "view", "user:ada")
       assert {:ok, :allowed} = Licet.check(name, "document:8", "view", "user:ada")
+
+      bulk = [
+        %{resource: "document:8", permission: "view", subject: "user:ada"},
+        %{resource: "document:9", permission: "view", subject: "user:ada"},
+        %{resource: "document:8", permission: "missing", subject: "user:ada"}
+      ]
+
+      for _ <- 1..2 do
+        assert {:ok, [{:ok, :allowed}, {:ok, :denied}, {:error, %{reason: :unknown_relation}}]} =
+                 Licet.check_bulk(name, bulk)
+      end
+
       assert :ok = Licet.GC.collect(name)
       send(Licet.GC.name(name), :gc)
       send(Licet.Revision.name(name), :refresh)
@@ -268,7 +328,6 @@ defmodule LicetTest do
     assert {:ok, _} = Licet.write(name, [])
     send(Licet.GC.name(name), :gc)
     :sys.get_state(Licet.GC.name(name))
-    assert :ok = Licet.Sandbox.allow(Licet.TestRepo, self())
     assert :ok = Licet.Testing.allow(Licet.TestRepo, self(), self())
     File.rm(path)
 
@@ -448,8 +507,6 @@ defmodule LicetTest do
       Licet.Config.new!(name: :bad, repo: Licet.TestRepo, schema: {:nope, "x"})
     end
 
-    assert :ok = Licet.Sandbox.allow(nil, self())
-    assert :ok = Licet.Sandbox.allow(Licet.FakeRepo, self())
     assert :ok = Licet.Testing.allow(Licet.FakeRepo, self(), self())
   end
 end

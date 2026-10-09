@@ -4,9 +4,7 @@ defmodule Licet.GapsTest do
   alias Licet.Schema.Validator
 
   test "dispatch deduplicates, times out, and keeps errors" do
-    name = Module.concat(Licet.Gaps, "I" <> Integer.to_string(System.unique_integer([:positive])))
-    start_supervised!({Licet.Cache, %{name: name}})
-    start_supervised!({Registry, keys: :unique, name: Module.concat(name, Registry)})
+    name = dispatch_instance()
 
     assert :miss = Licet.Cache.fetch(name, :missing)
     assert {:ok, :allowed} = Licet.Dispatch.compute(name, :once, 1_000, fn -> {:ok, :allowed} end)
@@ -240,10 +238,52 @@ defmodule Licet.GapsTest do
     assert name_errors != []
   end
 
-  test "recomputes a check when the owner exits before storing" do
-    name = Module.concat(Licet.Gaps, "D" <> Integer.to_string(System.unique_integer([:positive])))
+  test "a waiter gets the result while the owner keeps running" do
+    name = dispatch_instance()
+    parent = self()
+
+    owner =
+      spawn(fn ->
+        result =
+          Licet.Dispatch.compute(name, :busy, 1_000, fn ->
+            send(parent, :computing)
+            assert_receive :release, 1_000
+            {:ok, :allowed}
+          end)
+
+        send(parent, {:owner, result})
+        assert_receive :stop, 5_000
+      end)
+
+    assert_receive :computing
+
+    waiter =
+      Task.async(fn -> Licet.Dispatch.compute(name, :busy, 1_000, fn -> {:ok, :denied} end) end)
+
+    waiting!(name, :busy)
+
+    send(owner, :release)
+    assert_receive {:owner, {:ok, :allowed}}
+    assert {:ok, :allowed} = Task.await(waiter, 500)
+    send(owner, :stop)
+  end
+
+  defp dispatch_instance do
+    name = Module.concat(Licet.Gaps, "W" <> Integer.to_string(System.unique_integer([:positive])))
     start_supervised!({Licet.Cache, %{name: name}})
-    start_supervised!({Registry, keys: :unique, name: Module.concat(name, Registry)})
+    Enum.each(Licet.Dispatch.registries(name), &start_supervised!/1)
+    name
+  end
+
+  defp waiting!(name, key) do
+    if Registry.lookup(Module.concat(name, Waiters), key) == [] do
+      Process.sleep(5)
+      waiting!(name, key)
+    end
+  end
+
+  test "recomputes a check when the owner exits before storing" do
+    name = dispatch_instance()
     parent = self()
 
     holder =

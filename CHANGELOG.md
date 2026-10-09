@@ -24,15 +24,15 @@ The first public version.
 
 ### Queries
 
-* `check/5` and `check_bulk/3`, with a shared cache per snapshot and deduplication of identical checks in flight.
-* `lookup_resources/5` and `lookup_subjects/5`, paginated with cursors. `lookup_subjects/5` reports which subjects a wildcard excludes.
+* `check/5` and `check_bulk/3`, with a shared cache per snapshot and deduplication of identical checks in flight. A check reads one level of the graph per query, and `check_bulk/3` answers checks that share a resource type, permission, and subject together.
+* `lookup_resources/5` and `lookup_subjects/5`, paginated with cursors. `lookup_resources/5` walks back from the subject, so its cost follows the size of the answer rather than the number of resources. `lookup_subjects/5` reports which subjects a wildcard excludes.
 * `explain/5` returns the trace of a check.
 * Depth, time, and result-size limits on every query.
 
 ### Tooling
 
 * `Licet.Multi` adds a write to an `Ecto.Multi`.
-* `Licet.Testing` creates tables per test prefix and shares the Ecto sandbox with parallel checks.
+* `Licet.Testing` creates tables per test prefix and shares the Ecto sandbox with processes the test starts.
 * `mix licet.gen.migration` generates the install migration.
 * `mix licet.validate` runs a SpiceDB validation file, the YAML that the SpiceDB playground exports, including its expected relations.
 * Telemetry events for checks, lookups, writes, and the cache.

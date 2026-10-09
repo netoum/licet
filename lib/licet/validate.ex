@@ -48,7 +48,7 @@ defmodule Licet.Validate do
           %{assertion: String.t(), expected: :allowed | :denied, got: term()}
           | %{relation: String.t(), message: String.t()}
 
-  @check_opts [timeout: 5_000, parallel: nil]
+  @check_opts [timeout: 5_000]
 
   @doc """
   Reads the file at `path` and runs it with `run/1`.

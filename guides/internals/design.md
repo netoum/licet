@@ -8,6 +8,8 @@ Each instance uses one schema prefix (default `licet`). Three tables live there.
 
 `relationships` holds one row per tuple. `subject_relation` is `''` when the subject is a concrete object or a wildcard, never NULL. `deleted_xid` is NULL while the row is alive. A partial unique index on the six identity columns `WHERE deleted_xid IS NULL` stops two living copies of the same tuple.
 
+Reads go in two directions: from a resource (checks) and from a subject (lookups). Each direction has two partial indexes, one for living rows and one for deleted rows (`WHERE deleted_xid IS NOT NULL`). A snapshot can still see a row that was deleted after it, so reads must consider deleted rows too. Indexing them by the lookup columns keeps a read fast while many deleted rows wait for garbage collection. A third index on `deleted_xid` serves the collector.
+
 `transactions` records the `xid8` of a Licet write, the `pg_snapshot` taken for that write, and the database clock time. Tokens point at this row. They do not embed the snapshot as the source of truth.
 
 `schemas` stores the exact schema text, its sha256, and the xid that created it. A new schema tombstones the previous row in the same write.
@@ -24,7 +26,7 @@ A row is visible at a revision when all of these hold:
 
 The write path calls `pg_current_xact_id()` before `pg_current_snapshot()`, then inserts the `transactions` row, then applies preconditions and tuple changes. A second write in the same database transaction reuses the existing xid row instead of inserting another one. Postgres aborts a transaction after a unique violation, so the reuse is a lookup, not a rescued error.
 
-The read path never calls `pg_current_xact_id()`. It uses `pg_current_xact_id_if_assigned/0`, which is empty when the session has not written. An empty own-xid means "this snapshot only".
+The read path never calls `pg_current_xact_id()`. It uses `pg_current_xact_id_if_assigned/0`, which is empty when the session has not written. An empty own-xid means "this snapshot only". Relationship reads reuse a prepared statement per SQL shape on the connection, so a check that hits the same filters again skips planning.
 
 ## Tokens and consistency
 
@@ -38,7 +40,7 @@ Inside an open transaction, including a shared Ecto sandbox transaction that alr
 
 ## Cache
 
-The cache is a public ETS table whose name is distinct from the `Cache` process (`Instance.CacheTable` versus `Instance.Cache`). Keys include the whole revision: the snapshot, the own xid, and the time used for expiration. The snapshot alone is not enough. A transaction's recorded snapshot does not list its own xid, so it can have the same text as an autocommit snapshot taken just before it. The token for that transaction must still see its own writes. Errors, in-transaction checks, and `:full` are not stored. Concurrent misses for one key register in a `Registry` and the waiters reuse the first result.
+The cache is a public ETS table whose name is distinct from the `Cache` process (`Instance.CacheTable` versus `Instance.Cache`). Keys include the whole revision: the snapshot, the own xid, and the time used for expiration. The snapshot alone is not enough. A transaction's recorded snapshot does not list its own xid, so it can have the same text as an autocommit snapshot taken just before it. The token for that transaction must still see its own writes. Errors, in-transaction checks, and `:full` are not stored. Concurrent misses for one key register in a `Registry`: the first caller computes, and the others wait for it and reuse its result. The first caller is often a long-lived process, such as a LiveView, so it announces the stored result to each waiter's monitor alias instead of being watched for an exit. A waiter whose owner crashes, or whose result was an error, computes the check itself. `check_bulk` reads the cache for each check, computes the misses together, and stores each answer under its own key.
 
 ## Evaluation
 
@@ -54,7 +56,21 @@ Depth counts hops. The default limit is 50. A timeout is a monotonic deadline ch
 
 Direct cycles such as `view = view` are rejected at schema compile time. Recursion through data, such as `view = parent->view`, is allowed. Reaching the same object and name twice on one path returns a `:cycle` error. The stack is per path, so a diamond is not a cycle.
 
-With a running instance, the branches of an arrow or a userset walk run in parallel under the instance's `Task.Supervisor`. The first `:allowed` or error settles the answer and raises a shared cancel flag. Siblings check the flag before their next step and stop, the same way SpiceDB cancels a branch through its context. A sibling is killed only when the deadline passes. Killing it while it holds a checked-out connection would make Postgrex drop that connection.
+A check is evaluated one level of the graph at a time, for a set of resources at once. Each level is one query: it reads every relation the level's expression needs on the same object (for `view = owner + viewer + parent->view`, the `owner`, `viewer`, and `parent` rows) for every pending resource. The targets of an arrow or a userset walk are grouped by type and evaluated together at the next level. A union evaluates its right side only for the resources its left side did not allow; an intersection or exclusion only for those its left side did not deny. So a check costs one query per level of nesting rather than one per relation and branch, and `check_bulk` answers all checks that share a resource type, permission, and subject in the same number of queries as one.
+
+An allowed branch beats a failing sibling, and a denied side of an intersection or exclusion beats a failing other side, so a cycle or depth error on one path does not hide an answer found on another. The paths are tracked per resource, so cycle detection is as exact as for a single check. `explain` uses a separate evaluator that walks one resource depth-first and records the trace.
+
+## Lookups
+
+`lookup_resources` walks backwards from the subject, like SpiceDB's LookupResources, so its cost follows the size of the answer rather than the number of resources:
+
+- A relation reads the rows whose subject is the lookup subject, or a wildcard of its type, through the subject index. For each userset type the relation allows, such as `group#member`, it first finds the groups the subject belongs to, then reads the rows that point at those groups in one query.
+- An arrow first finds the target objects that grant the right-hand name, then reads the tupleset rows that point at them.
+- Unions and intersections combine the sets of their two sides.
+- An exclusion subtracts the right side's set. When the right side depends on a permission that is still being solved, each candidate from the left side is checked instead.
+- `.all()` takes the resources with at least one granting target as candidates and checks each one.
+
+A permission that refers back to itself, such as `view = viewer + parent->view`, is solved in rounds. Within a round, a permission sees its own set from the previous round. Rounds repeat until no set changes, which takes one round per level of nesting in the data. More rounds than `max_depth` fail with `:depth_exceeded`. Cyclic data converges like any other, so a lookup over it terminates.
 
 ## Why Postgres only
 

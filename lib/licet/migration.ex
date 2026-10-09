@@ -64,6 +64,16 @@ defmodule Licet.Migration do
       WHERE deleted_xid IS NOT NULL
       """,
       """
+      CREATE INDEX IF NOT EXISTS relationships_deleted_resource_idx
+      ON #{prefix}.relationships (resource_type, resource_id, relation)
+      WHERE deleted_xid IS NOT NULL
+      """,
+      """
+      CREATE INDEX IF NOT EXISTS relationships_deleted_subject_idx
+      ON #{prefix}.relationships (subject_type, subject_id, subject_relation, relation, resource_type)
+      WHERE deleted_xid IS NOT NULL
+      """,
+      """
       CREATE TABLE IF NOT EXISTS #{prefix}.transactions (
         xid xid8 PRIMARY KEY,
         snapshot pg_snapshot NOT NULL,

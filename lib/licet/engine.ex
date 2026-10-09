@@ -17,9 +17,12 @@ defmodule Licet.Engine do
   """
   @spec check(map(), term(), map(), map(), String.t(), map(), keyword()) :: result()
   def check(schema, reader, revision, resource, permission, subject, opts \\ []) do
-    case evaluate(schema, reader, revision, resource, permission, subject, opts, false) do
-      {:ok, answer, _trace} -> {:ok, answer}
+    schema
+    |> check_set(reader, revision, resource.type, [resource.id], permission, subject, opts)
+    |> Map.fetch!(resource.id)
+    |> case do
       {:error, error} -> {:error, error}
+      answer -> {:ok, answer}
     end
   end
 
@@ -29,35 +32,11 @@ defmodule Licet.Engine do
   @spec explain(map(), term(), map(), map(), String.t(), map(), keyword()) ::
           {:ok, :allowed | :denied, trace()} | {:error, Error.t()}
   def explain(schema, reader, revision, resource, permission, subject, opts \\ []) do
-    evaluate(schema, reader, revision, resource, permission, subject, opts, true)
-  end
-
-  @doc """
-  Folds the answers of parallel branches. The first `:allowed` or error
-  settles the result and raises `cancel`, so siblings stop at their next step
-  instead of being killed while they hold a database connection.
-  """
-  @spec collect(Enumerable.t(), :atomics.atomics_ref() | nil) :: result()
-  def collect(results, cancel \\ nil) do
-    Enum.reduce(results, {:ok, :denied}, fn
-      item, {:ok, :denied} -> settle(collect_item(item), cancel)
-      _item, settled -> settled
-    end)
-  end
-
-  defp settle({:ok, :denied} = pending, _cancel), do: pending
-
-  defp settle(settled, cancel) do
-    if cancel, do: :atomics.put(cancel, 1, 1)
-    settled
-  end
-
-  defp evaluate(schema, reader, revision, resource, permission, subject, opts, explain) do
-    ctx = context(schema, reader, revision, opts, explain)
+    ctx = context(schema, reader, revision, opts)
     eval(ctx, resource.type, resource.id, permission, subject)
   end
 
-  defp context(schema, reader, revision, opts, explain) do
+  defp context(schema, reader, revision, opts) do
     timeout = Keyword.get(opts, :timeout, 5_000)
 
     %{
@@ -68,11 +47,9 @@ defmodule Licet.Engine do
       depth: 0,
       max_depth: Keyword.get(opts, :max_depth, 50),
       deadline: System.monotonic_time(:millisecond) + timeout,
-      parallel: Keyword.get(opts, :parallel),
-      cancel: [],
-      explain: explain,
       max_lookup: Keyword.get(opts, :max_lookup, 10_000),
-      subject_type: nil
+      subject_type: nil,
+      rows: %{}
     }
   end
 
@@ -92,9 +69,6 @@ defmodule Licet.Engine do
 
   defp before_eval(ctx, type, id, name) do
     cond do
-      Enum.any?(ctx.cancel, &(:atomics.get(&1, 1) == 1)) ->
-        {:error, Error.new(:cancelled, "a sibling branch already settled the check")}
-
       System.monotonic_time(:millisecond) >= ctx.deadline ->
         {:error, Error.new(:timeout, "check timed out")}
 
@@ -291,28 +265,6 @@ defmodule Licet.Engine do
   defp arrow_target(%{subject_id: "*"}), do: []
   defp arrow_target(tuple), do: [{tuple.subject_type, tuple.subject_id}]
 
-  defp decide(targets, %{parallel: parallel, explain: false} = ctx, fun)
-       when not is_nil(parallel) and is_list(targets) and length(targets) > 1 do
-    parent = self()
-    cancel = :atomics.new(1, [])
-    child = %{ctx | cancel: [cancel | ctx.cancel]}
-
-    parallel.supervisor
-    |> Task.Supervisor.async_stream_nolink(
-      targets,
-      fn target ->
-        Licet.Sandbox.allow(parallel.repo, parent)
-        fun.(child, target)
-      end,
-      ordered: false,
-      max_concurrency: 8,
-      timeout: remaining(ctx),
-      on_timeout: :kill_task
-    )
-    |> collect(cancel)
-    |> wrap_children()
-  end
-
   defp decide(targets, ctx, fun) when is_list(targets) do
     Enum.reduce_while(targets, {:ok, :denied}, fn target, acc ->
       case fun.(ctx, target) do
@@ -327,19 +279,10 @@ defmodule Licet.Engine do
   defp wrap_children({:ok, answer}), do: {:ok, answer, []}
   defp wrap_children({:error, error}), do: {:error, error}
 
-  defp collect_item({:ok, {:ok, answer, _trace}}), do: {:ok, answer}
-  defp collect_item({:ok, {:ok, answer}}), do: {:ok, answer}
-  defp collect_item({:ok, {:error, error}}), do: {:error, error}
-  defp collect_item({:exit, _reason}), do: {:error, Error.new(:timeout, "check timed out")}
-
   defp answers_only({:ok, answer, children}), do: {:ok, answer, children}
   defp answers_only({:error, error}), do: {:error, error}
 
   defp deeper(ctx), do: %{ctx | depth: ctx.depth + 1}
-
-  defp remaining(ctx) do
-    max(ctx.deadline - System.monotonic_time(:millisecond), 0)
-  end
 
   defp tuples(ctx, filter) do
     Licet.Reader.list(ctx.reader, Map.merge(ctx.revision, filter))
@@ -353,6 +296,334 @@ defmodule Licet.Engine do
       children: children
     }
   end
+
+  @doc """
+  Checks `permission` for `subject` on every id in `ids`, all of `type`.
+
+  Each level of the graph is read for every pending id in one query, and the
+  relations one permission reads on the same object are read together. An id
+  is allowed as soon as one branch allows it, even if a sibling branch fails,
+  and denied as soon as one side of an intersection or exclusion denies it.
+  """
+  @spec check_set(map(), term(), map(), String.t(), [String.t()], String.t(), map(), keyword()) ::
+          %{String.t() => :allowed | :denied | {:error, Error.t()}}
+  def check_set(schema, reader, revision, type, ids, permission, subject, opts \\ []) do
+    ctx = context(schema, reader, revision, opts)
+    items = ids |> Enum.uniq() |> Enum.map(&{make_ref(), &1, MapSet.new()})
+    results = eval_set(ctx, type, permission, subject, items)
+    Map.new(items, fn {ref, id, _path} -> {id, Map.fetch!(results, ref)} end)
+  end
+
+  # An item is `{ref, id, path}`: the path holds the `{type, id, name}` steps
+  # that led to it, so a cycle is detected per item as in `eval/5`.
+  defp eval_set(ctx, type, name, subject, items) do
+    with :ok <- before_set(ctx),
+         {:ok, definition} <- fetch_definition(ctx, type),
+         :ok <- defined(definition, type, name) do
+      {cyclic, items} = Enum.split_with(items, &on_path?(&1, type, name))
+
+      {same, items} =
+        Enum.split_with(items, fn {_ref, id, _} -> same_userset?(subject, type, id, name) end)
+
+      items =
+        Enum.map(items, fn {ref, id, path} -> {ref, id, MapSet.put(path, {type, id, name})} end)
+
+      cyclic
+      |> Map.new(fn {ref, id, _path} ->
+        {ref, {:error, Error.new(:cycle, "cycle at #{type}:#{id}##{name}")}}
+      end)
+      |> Map.merge(fill(same, :allowed))
+      |> Map.merge(body_set(ctx, definition, type, name, subject, items))
+    else
+      {:error, error} -> fill(items, {:error, error})
+    end
+  end
+
+  defp before_set(ctx) do
+    cond do
+      System.monotonic_time(:millisecond) >= ctx.deadline ->
+        {:error, Error.new(:timeout, "check timed out")}
+
+      ctx.depth > ctx.max_depth ->
+        {:error, Error.new(:depth_exceeded, "check exceeded max depth of #{ctx.max_depth}")}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp defined(definition, type, name) do
+    if defined?(definition, name),
+      do: :ok,
+      else:
+        {:error, Error.new(:unknown_relation, "unknown relation or permission #{type}##{name}")}
+  end
+
+  defp on_path?({_ref, id, path}, type, name), do: MapSet.member?(path, {type, id, name})
+
+  defp body_set(ctx, definition, type, name, subject, items) do
+    if Map.has_key?(definition.relations, name) do
+      relation_set(ctx, type, name, subject, items)
+    else
+      expr = Map.fetch!(definition.permissions, name)
+      ctx = prefetch(ctx, definition, type, expr, item_ids(items))
+      expr_set(ctx, type, expr, subject, items)
+    end
+  end
+
+  defp relation_set(_ctx, _type, _name, _subject, []), do: %{}
+
+  defp relation_set(ctx, type, name, subject, items) do
+    rows = relation_rows(ctx, type, name, item_ids(items))
+
+    {direct, others} =
+      Enum.split_with(items, fn {_ref, id, _} -> direct?(Map.get(rows, id, []), subject) end)
+
+    links =
+      for {ref, id, path} <- others,
+          tuple <- Map.get(rows, id, []),
+          userset?(tuple),
+          do:
+            {ref, {tuple.subject_type, tuple.subject_relation},
+             {make_ref(), tuple.subject_id, path}}
+
+    child_results =
+      links
+      |> Enum.group_by(fn {_ref, group, _child} -> group end, fn {_ref, _group, child} ->
+        child
+      end)
+      |> Enum.reduce(%{}, fn {{child_type, relation}, children}, acc ->
+        Map.merge(acc, eval_set(deeper(ctx), child_type, relation, subject, children))
+      end)
+
+    direct
+    |> fill(:allowed)
+    |> Map.merge(any_of(others, links, child_results))
+  end
+
+  defp expr_set(_ctx, _type, _expr, _subject, []), do: %{}
+
+  defp expr_set(ctx, type, {:ref, name}, subject, items),
+    do: eval_set(ctx, type, name, subject, items)
+
+  defp expr_set(_ctx, _type, :nil_expr, _subject, items), do: fill(items, :denied)
+
+  defp expr_set(ctx, type, {:union, left, right}, subject, items) do
+    combine_set(ctx, type, left, right, subject, items, &(&1 != :allowed), &either/2)
+  end
+
+  defp expr_set(ctx, type, {:intersection, left, right}, subject, items) do
+    combine_set(ctx, type, left, right, subject, items, &(&1 != :denied), &both/2)
+  end
+
+  defp expr_set(ctx, type, {:exclusion, left, right}, subject, items) do
+    combine_set(ctx, type, left, right, subject, items, &(&1 != :denied), &without/2)
+  end
+
+  defp expr_set(ctx, type, {kind, left, right}, subject, items)
+       when kind in [:arrow, :arrow_all] do
+    targets = arrow_targets_set(ctx, type, item_ids(items), left)
+    ctx = deeper(ctx)
+
+    links =
+      for {ref, id, path} <- items,
+          {target_type, target_id} <- Map.get(targets, id, []),
+          do: {ref, target_type, {make_ref(), target_id, path}}
+
+    child_results =
+      links
+      |> Enum.group_by(fn {_ref, target_type, _child} -> target_type end, fn {_ref, _type, child} ->
+        child
+      end)
+      |> Enum.reduce(%{}, fn {target_type, children}, acc ->
+        Map.merge(acc, target_set(ctx, target_type, right, subject, children))
+      end)
+
+    if kind == :arrow,
+      do: any_of(items, links, child_results),
+      else: all_of(items, links, child_results)
+  end
+
+  # The right side only runs for the items the left side leaves open.
+  defp combine_set(ctx, type, left, right, subject, items, open?, combine) do
+    left_results = expr_set(ctx, type, left, subject, items)
+    open = Enum.filter(items, fn {ref, _id, _path} -> open?.(Map.fetch!(left_results, ref)) end)
+    right_results = expr_set(ctx, type, right, subject, open)
+
+    Map.new(items, fn {ref, _id, _path} ->
+      {ref, combine.(Map.fetch!(left_results, ref), Map.get(right_results, ref))}
+    end)
+  end
+
+  defp either(:allowed, _right), do: :allowed
+  defp either(_left, :allowed), do: :allowed
+  defp either({:error, _} = error, _right), do: error
+  defp either(_left, {:error, _} = error), do: error
+  defp either(_left, _right), do: :denied
+
+  defp both(:denied, _right), do: :denied
+  defp both(_left, :denied), do: :denied
+  defp both({:error, _} = error, _right), do: error
+  defp both(_left, {:error, _} = error), do: error
+  defp both(_left, _right), do: :allowed
+
+  defp without(:denied, _right), do: :denied
+  defp without(_left, :allowed), do: :denied
+  defp without({:error, _} = error, _right), do: error
+  defp without(_left, {:error, _} = error), do: error
+  defp without(_left, _right), do: :allowed
+
+  defp target_set(ctx, type, expr, subject, children) do
+    if reachable?(ctx, type, expr),
+      do: expr_set(ctx, type, expr, subject, children),
+      else: fill(children, :denied)
+  end
+
+  defp any_of(items, links, child_results) do
+    fold_links(items, links, child_results, :denied, &either/2)
+  end
+
+  # `.all()` grants nothing without a target, and otherwise needs every one.
+  defp all_of(items, links, child_results) do
+    linked = MapSet.new(links, fn {ref, _group, _child} -> ref end)
+
+    items
+    |> Enum.reject(fn {ref, _id, _path} -> MapSet.member?(linked, ref) end)
+    |> fill(:denied)
+    |> Map.merge(
+      fold_links(
+        Enum.filter(items, &MapSet.member?(linked, elem(&1, 0))),
+        links,
+        child_results,
+        :allowed,
+        &both/2
+      )
+    )
+  end
+
+  defp fold_links(items, links, child_results, initial, combine) do
+    by_parent =
+      Enum.group_by(links, fn {ref, _group, _child} -> ref end, fn {_ref, _group, {child, _, _}} ->
+        Map.fetch!(child_results, child)
+      end)
+
+    Map.new(items, fn {ref, _id, _path} ->
+      {ref, Enum.reduce(Map.get(by_parent, ref, []), initial, &combine.(&2, &1))}
+    end)
+  end
+
+  defp arrow_targets_set(ctx, type, ids, relation) when is_binary(relation) do
+    ctx
+    |> relation_rows(type, relation, ids)
+    |> Map.new(fn {id, rows} -> {id, Enum.flat_map(rows, &arrow_target/1)} end)
+  end
+
+  defp arrow_targets_set(ctx, type, ids, {:ref, name}),
+    do: arrow_targets_set(ctx, type, ids, name)
+
+  defp arrow_targets_set(ctx, type, ids, {:arrow, left, right}) do
+    first = arrow_targets_set(ctx, type, ids, left)
+
+    next =
+      first
+      |> Map.values()
+      |> List.flatten()
+      |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+      |> Map.new(fn {target_type, target_ids} ->
+        {target_type, arrow_targets_set(ctx, target_type, Enum.uniq(target_ids), right)}
+      end)
+
+    Map.new(first, fn {id, targets} ->
+      {id,
+       Enum.flat_map(targets, fn {target_type, target_id} ->
+         next |> Map.fetch!(target_type) |> Map.get(target_id, [])
+       end)}
+    end)
+  end
+
+  defp arrow_targets_set(_ctx, _type, _ids, _other), do: %{}
+
+  # Rows already read for this level are reused; anything else is one query.
+  defp relation_rows(ctx, type, relation, ids) do
+    case Map.get(ctx.rows, {type, relation}) do
+      %{ids: covered, by_id: by_id} ->
+        if Enum.all?(ids, &MapSet.member?(covered, &1)),
+          do: by_id,
+          else: read_rows(ctx, type, relation, ids)
+
+      nil ->
+        read_rows(ctx, type, relation, ids)
+    end
+  end
+
+  defp read_rows(ctx, type, relation, ids) do
+    ctx
+    |> tuples(%{resource_type: type, resource_id: ids, relation: relation})
+    |> Enum.group_by(& &1.resource_id)
+  end
+
+  defp prefetch(ctx, definition, type, expr, ids) do
+    relations =
+      definition
+      |> local_relations(expr, [])
+      |> Enum.uniq()
+      |> Enum.reject(&covered?(ctx, type, &1, ids))
+
+    if length(relations) < 2 or ids == [] do
+      ctx
+    else
+      rows =
+        tuples(ctx, %{resource_type: type, resource_id: ids, relation: relations})
+
+      covered = MapSet.new(ids)
+
+      Enum.reduce(relations, ctx, fn relation, ctx ->
+        by_id = rows |> Enum.filter(&(&1.relation == relation)) |> Enum.group_by(& &1.resource_id)
+        %{ctx | rows: Map.put(ctx.rows, {type, relation}, %{ids: covered, by_id: by_id})}
+      end)
+    end
+  end
+
+  defp covered?(ctx, type, relation, ids) do
+    case Map.get(ctx.rows, {type, relation}) do
+      %{ids: covered} -> Enum.all?(ids, &MapSet.member?(covered, &1))
+      nil -> false
+    end
+  end
+
+  # The relations one permission reads on its own object, through other
+  # permissions of the same definition and the first hop of each arrow.
+  defp local_relations(definition, {:ref, name}, seen) do
+    cond do
+      Map.has_key?(definition.relations, name) ->
+        [name]
+
+      name in seen ->
+        []
+
+      true ->
+        local_relations(definition, Map.fetch!(definition.permissions, name), [name | seen])
+    end
+  end
+
+  defp local_relations(definition, {op, left, right}, seen)
+       when op in [:union, :intersection, :exclusion] do
+    local_relations(definition, left, seen) ++ local_relations(definition, right, seen)
+  end
+
+  defp local_relations(_definition, {kind, left, _right}, _seen)
+       when kind in [:arrow, :arrow_all],
+       do: first_relation(left)
+
+  defp local_relations(_definition, :nil_expr, _seen), do: []
+
+  defp first_relation(name) when is_binary(name), do: [name]
+  defp first_relation({:arrow, left, _right}), do: first_relation(left)
+  defp first_relation(_other), do: []
+
+  defp item_ids(items), do: items |> Enum.map(&elem(&1, 1)) |> Enum.uniq()
+
+  defp fill(items, value), do: Map.new(items, fn {ref, _id, _path} -> {ref, value} end)
 
   @doc false
   @spec lookup_guard(non_neg_integer(), pos_integer()) :: :ok | {:error, Error.t()}
@@ -384,7 +655,7 @@ defmodule Licet.Engine do
         opts
       ) do
     ctx = %{
-      context(schema, reader, revision, opts, false)
+      context(schema, reader, revision, opts)
       | subject_type: {subject_type, subject_relation}
     }
 
@@ -543,7 +814,7 @@ defmodule Licet.Engine do
   @spec membership(map(), term(), map(), String.t(), String.t(), String.t(), keyword()) ::
           {:ok, Membership.t()} | {:error, Error.t()}
   def membership(schema, reader, revision, type, id, name, opts \\ []) do
-    ctx = context(schema, reader, revision, opts, false)
+    ctx = context(schema, reader, revision, opts)
     members(ctx, type, id, name)
   end
 
@@ -634,160 +905,230 @@ defmodule Licet.Engine do
   @spec resource_ids(map(), term(), map(), String.t(), String.t(), map(), keyword()) ::
           {:ok, MapSet.t()} | {:error, Error.t()}
   def resource_ids(schema, reader, revision, resource_type, permission, subject, opts) do
-    ctx = context(schema, reader, revision, opts, false)
-    resources(ctx, resource_type, {:ref, permission}, subject)
+    ctx = context(schema, reader, revision, opts)
+    resources_round(ctx, resource_type, permission, subject, %{}, 0)
   end
 
-  defp resources(ctx, resource_type, expr, subject) do
-    with :ok <- before_expand(ctx),
-         {:ok, definition} <- fetch_definition(ctx, resource_type) do
-      resource_expr(ctx, definition, resource_type, expr, subject)
-    end
-  end
+  # Lookups walk backwards from the subject, like SpiceDB's LookupResources:
+  # a relation is read through the subject index, an arrow from the targets
+  # already found, so the work follows the answer rather than every resource.
+  #
+  # A permission that refers back to itself, such as `parent->view`, sees the
+  # previous round's set for itself. Rounds repeat until no set changes, which
+  # takes one round per level of nesting in the data.
+  defp resources_round(ctx, type, name, subject, previous, round) do
+    state = %{previous: previous, done: %{}, stack: [], recursive: false}
 
-  defp resource_expr(ctx, definition, resource_type, {:ref, name}, subject) do
-    with {:ok, ids} <- ref_resources(ctx, definition, resource_type, name, subject) do
-      if subject.type == resource_type and subject.relation == name,
-        do: capped_ids(ctx, MapSet.put(ids, subject.id)),
-        else: {:ok, ids}
-    end
-  end
+    with {:ok, ids, state} <- ref_ids(ctx, type, name, subject, state) do
+      cond do
+        not state.recursive or state.done == previous ->
+          {:ok, ids}
 
-  defp resource_expr(_ctx, _definition, _resource_type, :nil_expr, _subject),
-    do: {:ok, MapSet.new()}
+        round >= ctx.max_depth ->
+          {:error, Error.new(:depth_exceeded, "lookup exceeded max depth of #{ctx.max_depth}")}
 
-  defp resource_expr(ctx, _definition, resource_type, {:arrow_all, left, _right} = expr, subject) do
-    ctx
-    |> tuples(%{resource_type: resource_type, relation: relation_name(left)})
-    |> Enum.uniq_by(& &1.resource_id)
-    |> Enum.reduce_while({:ok, MapSet.new()}, fn %{resource_id: id}, {:ok, acc} ->
-      ctx
-      |> expression(resource_type, id, expr, subject)
-      |> keep_allowed(ctx, id, acc)
-    end)
-  end
-
-  defp resource_expr(ctx, _definition, resource_type, {:union, left, right}, subject) do
-    with {:ok, left_ids} <- resources(ctx, resource_type, left, subject),
-         {:ok, right_ids} <- resources(ctx, resource_type, right, subject) do
-      capped_ids(ctx, MapSet.union(left_ids, right_ids))
-    end
-  end
-
-  defp resource_expr(ctx, _definition, resource_type, {:intersection, left, right}, subject) do
-    with {:ok, left_ids} <- resources(ctx, resource_type, left, subject),
-         {:ok, right_ids} <- resources(ctx, resource_type, right, subject) do
-      capped_ids(ctx, MapSet.intersection(left_ids, right_ids))
-    end
-  end
-
-  defp resource_expr(ctx, _definition, resource_type, {:exclusion, left, right}, subject) do
-    with {:ok, left_ids} <- resources(ctx, resource_type, left, subject),
-         {:ok, right_ids} <- resources(ctx, resource_type, right, subject) do
-      capped_ids(ctx, MapSet.difference(left_ids, right_ids))
-    end
-  end
-
-  defp resource_expr(ctx, _definition, resource_type, {:arrow, left, right}, subject) do
-    ctx = deeper(ctx)
-    expr = remaining_expr(left, right)
-
-    ctx
-    |> tuples(%{resource_type: resource_type, relation: relation_name(left)})
-    |> Enum.reduce_while({:ok, MapSet.new()}, fn tuple, {:ok, acc} ->
-      consider_arrow(ctx, acc, tuple, expr, subject)
-    end)
-  end
-
-  defp ref_resources(ctx, definition, resource_type, name, subject) do
-    cond do
-      Map.has_key?(definition.relations, name) ->
-        resources_for_relation(ctx, resource_type, name, subject)
-
-      Map.has_key?(definition.permissions, name) ->
-        resources(ctx, resource_type, Map.fetch!(definition.permissions, name), subject)
-
-      true ->
-        {:error,
-         Error.new(:unknown_relation, "unknown relation or permission #{resource_type}##{name}")}
-    end
-  end
-
-  defp remaining_expr(left, right) when is_binary(left), do: right
-  defp remaining_expr({:arrow, _left, inner}, right), do: {:arrow, relation_name(inner), right}
-
-  defp consider_arrow(ctx, acc, tuple, expr, subject) do
-    if arrow_target(tuple) == [] do
-      {:cont, {:ok, acc}}
-    else
-      case resources_allowed?(ctx, tuple, expr, subject) do
-        {:ok, true} -> keep(capped_ids(ctx, MapSet.put(acc, tuple.resource_id)))
-        {:ok, false} -> {:cont, {:ok, acc}}
-        {:error, error} -> {:halt, {:error, error}}
+        true ->
+          resources_round(ctx, type, name, subject, state.done, round + 1)
       end
     end
   end
 
-  defp resources_allowed?(ctx, tuple, right, subject) do
-    case target_expression(ctx, tuple.subject_type, tuple.subject_id, right, subject) do
-      {:ok, :allowed, _children} -> {:ok, true}
-      {:ok, :denied, _children} -> {:ok, false}
-      {:error, error} -> {:error, error}
+  defp ref_ids(ctx, type, name, subject, state) do
+    key = {type, name}
+
+    cond do
+      Map.has_key?(state.done, key) ->
+        {:ok, Map.fetch!(state.done, key), state}
+
+      key in state.stack ->
+        {:ok, Map.get(state.previous, key, MapSet.new()), %{state | recursive: true}}
+
+      true ->
+        compute_ref(ctx, type, name, subject, state)
     end
   end
 
-  defp keep_allowed({:ok, :allowed, _children}, ctx, id, acc),
-    do: keep(capped_ids(ctx, MapSet.put(acc, id)))
+  defp compute_ref(ctx, type, name, subject, state) do
+    inner = %{state | stack: [{type, name} | state.stack]}
 
-  defp keep_allowed({:ok, :denied, _children}, _ctx, _id, acc), do: {:cont, {:ok, acc}}
-  defp keep_allowed({:error, error}, _ctx, _id, _acc), do: {:halt, {:error, error}}
+    with :ok <- before_expand(ctx),
+         {:ok, definition} <- fetch_definition(ctx, type),
+         {:ok, ids, inner} <- ref_body(ctx, definition, type, name, subject, inner),
+         {:ok, ids} <- capped_ids(ctx, self_userset(ids, type, name, subject)) do
+      {:ok, ids, %{inner | stack: state.stack, done: Map.put(inner.done, {type, name}, ids)}}
+    end
+  end
 
-  defp resources_for_relation(ctx, resource_type, name, subject) do
-    ctx
-    |> tuples(%{resource_type: resource_type, relation: name})
-    |> Enum.reduce_while({:ok, MapSet.new()}, fn tuple, {:ok, acc} ->
-      consider_resource(deeper(ctx), acc, tuple, subject)
+  defp ref_body(ctx, definition, type, name, subject, state) do
+    cond do
+      Map.has_key?(definition.relations, name) ->
+        relation_ids(ctx, type, Map.fetch!(definition.relations, name), subject, state)
+
+      Map.has_key?(definition.permissions, name) ->
+        expr_ids(ctx, type, Map.fetch!(definition.permissions, name), subject, state)
+
+      true ->
+        {:error, Error.new(:unknown_relation, "unknown relation or permission #{type}##{name}")}
+    end
+  end
+
+  defp self_userset(ids, type, name, subject) do
+    if subject.type == type and subject.relation == name,
+      do: MapSet.put(ids, subject.id),
+      else: ids
+  end
+
+  defp relation_ids(ctx, type, relation, subject, state) do
+    relation.subjects
+    |> Enum.filter(& &1.relation)
+    |> Enum.uniq_by(&{&1.type, &1.relation})
+    |> Enum.reduce_while({:ok, direct_ids(ctx, type, relation, subject), state}, fn
+      allowed, {:ok, acc, state} ->
+        case ref_ids(ctx, allowed.type, allowed.relation, subject, state) do
+          {:ok, members, state} ->
+            filter = %{
+              resource_type: type,
+              relation: relation.name,
+              subject_type: allowed.type,
+              subject_relation: allowed.relation
+            }
+
+            ids = MapSet.new(ids_with_subjects(ctx, filter, members))
+            {:cont, {:ok, MapSet.union(acc, ids), state}}
+
+          {:error, error} ->
+            {:halt, {:error, error}}
+        end
     end)
   end
 
-  defp resource_match(_ctx, tuple, subject) do
-    cond do
-      concrete_subject?(tuple, subject) -> {:ok, true}
-      wildcard_subject?(tuple, subject) -> {:ok, true}
-      tuple.subject_relation != "" -> {:error, :walk}
-      true -> {:ok, false}
+  defp direct_ids(ctx, type, relation, subject) do
+    filter = %{resource_type: type, relation: relation.name, subject_type: subject.type}
+
+    concrete? =
+      Enum.any?(relation.subjects, fn allowed ->
+        allowed.type == subject.type and not allowed.wildcard and
+          (allowed.relation || "") == subject.relation
+      end)
+
+    wildcard? =
+      subject.relation == "" and
+        Enum.any?(relation.subjects, &(&1.type == subject.type and &1.wildcard))
+
+    concrete = Map.merge(filter, %{subject_id: subject.id, subject_relation: subject.relation})
+    wildcard = Map.merge(filter, %{subject_id: "*", subject_relation: ""})
+    MapSet.new(ids_if(ctx, concrete?, concrete) ++ ids_if(ctx, wildcard?, wildcard))
+  end
+
+  defp ids_if(_ctx, false, _filter), do: []
+  defp ids_if(ctx, true, filter), do: ctx |> tuples(filter) |> Enum.map(& &1.resource_id)
+
+  defp ids_with_subjects(ctx, filter, subject_ids) do
+    if MapSet.size(subject_ids) == 0,
+      do: [],
+      else: ids_if(ctx, true, Map.put(filter, :subject_id, MapSet.to_list(subject_ids)))
+  end
+
+  defp expr_ids(ctx, type, {:ref, name}, subject, state),
+    do: ref_ids(ctx, type, name, subject, state)
+
+  defp expr_ids(_ctx, _type, :nil_expr, _subject, state), do: {:ok, MapSet.new(), state}
+
+  defp expr_ids(ctx, type, {:union, left, right}, subject, state) do
+    with {:ok, left_ids, state} <- expr_ids(ctx, type, left, subject, state),
+         {:ok, right_ids, state} <- expr_ids(ctx, type, right, subject, state) do
+      {:ok, MapSet.union(left_ids, right_ids), state}
     end
   end
 
-  defp concrete_subject?(tuple, subject) do
-    tuple.subject_relation == subject.relation and tuple.subject_type == subject.type and
-      tuple.subject_id == subject.id
-  end
-
-  defp wildcard_subject?(tuple, subject) do
-    tuple.subject_relation == "" and tuple.subject_id == "*" and
-      tuple.subject_type == subject.type and subject.relation == ""
-  end
-
-  defp consider_resource(ctx, acc, tuple, subject) do
-    case resource_match(ctx, tuple, subject) do
-      {:ok, true} -> keep(capped_ids(ctx, MapSet.put(acc, tuple.resource_id)))
-      {:ok, false} -> {:cont, {:ok, acc}}
-      {:error, :walk} -> walk_resource(ctx, acc, tuple, subject)
+  defp expr_ids(ctx, type, {:intersection, left, right}, subject, state) do
+    with {:ok, left_ids, state} <- expr_ids(ctx, type, left, subject, state),
+         {:ok, right_ids, state} <- expr_ids(ctx, type, right, subject, state) do
+      {:ok, MapSet.intersection(left_ids, right_ids), state}
     end
   end
 
-  defp walk_resource(ctx, acc, tuple, subject) do
-    case eval(ctx, tuple.subject_type, tuple.subject_id, tuple.subject_relation, subject) do
-      {:ok, :allowed, _trace} -> keep(capped_ids(ctx, MapSet.put(acc, tuple.resource_id)))
-      {:ok, :denied, _trace} -> {:cont, {:ok, acc}}
-      {:error, error} -> {:halt, {:error, error}}
+  # A set difference is only safe when the subtracted side is final. When it
+  # depends on a permission still being solved, each candidate is checked.
+  defp expr_ids(ctx, type, {:exclusion, left, right} = expr, subject, state) do
+    with {:ok, left_ids, state} <- expr_ids(ctx, type, left, subject, state),
+         {:ok, right_ids, inner} <-
+           expr_ids(ctx, type, right, subject, %{state | recursive: false}) do
+      state = %{inner | recursive: state.recursive or inner.recursive}
+
+      if inner.recursive,
+        do: verified_ids(ctx, type, expr, subject, left_ids, state),
+        else: {:ok, MapSet.difference(left_ids, right_ids), state}
     end
   end
 
-  defp relation_name(name) when is_binary(name), do: name
-  defp relation_name({:ref, name}), do: name
-  defp relation_name({:arrow, left, _right}), do: relation_name(left)
+  defp expr_ids(ctx, type, {:arrow, _left, _right} = expr, subject, state) do
+    {relation, right} = arrow_path(expr)
+    arrow_ids(ctx, type, relation, right, subject, state)
+  end
+
+  # Resources with at least one target that has the permission are the
+  # candidates; each is then checked against every target.
+  defp expr_ids(ctx, type, {:arrow_all, left, right} = expr, subject, state) do
+    {relation, rest} = arrow_path({:arrow, left, right})
+
+    with {:ok, candidates, state} <- arrow_ids(ctx, type, relation, rest, subject, state) do
+      verified_ids(ctx, type, expr, subject, candidates, state)
+    end
+  end
+
+  defp arrow_path({:arrow, relation, right}) when is_binary(relation), do: {relation, right}
+
+  defp arrow_path({:arrow, {:arrow, left, {:ref, name}}, right}),
+    do: arrow_path({:arrow, left, {:arrow, name, right}})
+
+  defp arrow_ids(ctx, type, relation_name, right, subject, state) do
+    with {:ok, definition} <- fetch_definition(ctx, type) do
+      definition.relations
+      |> Map.fetch!(relation_name)
+      |> Map.fetch!(:subjects)
+      |> Enum.map(& &1.type)
+      |> Enum.uniq()
+      |> Enum.filter(&reachable?(ctx, &1, right))
+      |> Enum.reduce_while({:ok, MapSet.new(), state}, fn target, {:ok, acc, state} ->
+        arrow_step(ctx, type, relation_name, target, right, subject, acc, state)
+      end)
+    end
+  end
+
+  defp arrow_step(ctx, type, relation_name, target, right, subject, acc, state) do
+    case target_ids(ctx, target, right, subject, state) do
+      {:ok, target_ids, state} ->
+        filter = %{resource_type: type, relation: relation_name, subject_type: target}
+        ids = MapSet.new(ids_with_subjects(ctx, filter, target_ids))
+        {:cont, {:ok, MapSet.union(acc, ids), state}}
+
+      {:error, error} ->
+        {:halt, {:error, error}}
+    end
+  end
+
+  defp target_ids(ctx, type, {:ref, name}, subject, state),
+    do: ref_ids(ctx, type, name, subject, state)
+
+  defp target_ids(ctx, type, expr, subject, state) do
+    with {:ok, _definition} <- fetch_definition(ctx, type) do
+      expr_ids(ctx, type, expr, subject, state)
+    end
+  end
+
+  defp verified_ids(ctx, type, expr, subject, candidates, state) do
+    items = candidates |> Enum.uniq() |> Enum.map(&{make_ref(), &1, MapSet.new()})
+    results = expr_set(ctx, type, expr, subject, items)
+
+    Enum.reduce_while(items, {:ok, MapSet.new(), state}, fn {ref, id, _path}, {:ok, acc, state} ->
+      case Map.fetch!(results, ref) do
+        :allowed -> {:cont, {:ok, MapSet.put(acc, id), state}}
+        :denied -> {:cont, {:ok, acc, state}}
+        {:error, error} -> {:halt, {:error, error}}
+      end
+    end)
+  end
 
   defp capped_ids(ctx, %MapSet{} = ids) do
     case lookup_guard(MapSet.size(ids), ctx.max_lookup) do

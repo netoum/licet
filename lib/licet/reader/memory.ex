@@ -9,8 +9,12 @@ defmodule Licet.Reader.Memory do
   defimpl Licet.Reader do
     def list(%{tuples: tuples}, filter) do
       at = Map.fetch!(filter, :at)
+      filter = Map.new(filter, fn {key, value} -> {key, membership(value)} end)
       Enum.filter(tuples, &visible?(&1, filter, at))
     end
+
+    defp membership(values) when is_list(values), do: MapSet.new(values)
+    defp membership(value), do: value
 
     defp visible?(tuple, filter, at) do
       current?(tuple, at) and equals?(tuple, filter)
@@ -25,6 +29,7 @@ defmodule Licet.Reader.Memory do
         fn field ->
           case Map.get(filter, field) do
             nil -> true
+            %MapSet{} = values -> MapSet.member?(values, Map.get(tuple, field))
             value -> Map.get(tuple, field) == value
           end
         end

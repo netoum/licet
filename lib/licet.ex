@@ -134,14 +134,14 @@ defmodule Licet do
   def init(config) do
     :persistent_term.put({Licet, config.name, :config}, config)
 
-    children = [
-      {Licet.Cache, config},
-      {Registry, keys: :unique, name: Module.concat(config.name, Registry)},
-      {Task.Supervisor, name: Module.concat(config.name, Tasks)},
-      {SchemaServer, config},
-      {Revision, config},
-      {Licet.GC, config}
-    ]
+    children =
+      [{Licet.Cache, config}] ++
+        Dispatch.registries(config.name) ++
+        [
+          {SchemaServer, config},
+          {Revision, config},
+          {Licet.GC, config}
+        ]
 
     Supervisor.init(children, strategy: :one_for_one)
   end
@@ -345,7 +345,7 @@ defmodule Licet do
         when result: {:ok, :allowed | :denied} | {:error, Error.t()}
   def check_bulk(name, checks, opts \\ []) when is_list(checks) do
     with {:ok, prepared} <- prepare(name, opts) do
-      {:ok, Enum.map(checks, &bulk_one(prepared, &1, opts))}
+      {:ok, run_bulk(prepared, checks)}
     end
   end
 
@@ -662,8 +662,7 @@ defmodule Licet do
     [
       timeout: config.timeout,
       max_depth: config.max_depth,
-      max_lookup: config.max_lookup,
-      parallel: %{supervisor: Module.concat(config.name, Tasks), repo: config.repo}
+      max_lookup: config.max_lookup
     ]
   end
 
@@ -680,8 +679,7 @@ defmodule Licet do
   end
 
   defp run_check(prepared, resource, permission, subject) do
-    %{snapshot: snapshot, own_xid: own_xid, at: at} = prepared.revision
-    key = {{snapshot, own_xid, at}, resource, permission, subject}
+    key = cache_key(prepared, {resource, permission, subject})
 
     Dispatch.compute(prepared.config.name, key, prepared.config.timeout, fn ->
       Engine.check(
@@ -696,12 +694,76 @@ defmodule Licet do
     end)
   end
 
-  defp bulk_one(prepared, check, _opts) do
+  defp cache_key(%{revision: %{snapshot: snapshot, own_xid: own_xid, at: at}}, check) do
+    {resource, permission, subject} = check
+    {{snapshot, own_xid, at}, resource, permission, subject}
+  end
+
+  # Checks that share a resource type, permission, and subject are answered
+  # together, one query per level of the graph.
+  defp run_bulk(prepared, checks) do
+    parsed = Enum.map(checks, &bulk_item/1)
+    valid = for({:ok, check} <- parsed, do: check) |> Enum.uniq()
+    {hits, misses} = bulk_cached(prepared, valid)
+
+    answers =
+      misses
+      |> Enum.group_by(fn {resource, permission, subject} ->
+        {resource.type, permission, subject}
+      end)
+      |> Enum.reduce(hits, fn {group, group_checks}, acc ->
+        Map.merge(acc, bulk_group(prepared, group, group_checks))
+      end)
+
+    Enum.map(parsed, fn
+      {:ok, check} -> Map.fetch!(answers, check)
+      {:error, error} -> {:error, error}
+    end)
+  end
+
+  defp bulk_item(check) do
     with {:ok, resource} <- object(check.resource, false),
          {:ok, subject} <- object(check.subject, true) do
-      run_check(prepared, resource, check.permission, subject)
+      {:ok, {resource, check.permission, subject}}
     end
   end
+
+  defp bulk_cached(%{revision: %{cache?: false}}, checks), do: {%{}, checks}
+
+  defp bulk_cached(prepared, checks) do
+    Enum.reduce(checks, {%{}, []}, fn check, {hits, misses} ->
+      case Dispatch.cached(prepared.config.name, cache_key(prepared, check)) do
+        {:ok, value} -> {Map.put(hits, check, {:ok, value}), misses}
+        :miss -> {hits, [check | misses]}
+      end
+    end)
+  end
+
+  defp bulk_group(prepared, {type, permission, subject}, checks) do
+    ids = Enum.map(checks, fn {resource, _permission, _subject} -> resource.id end)
+
+    results =
+      Engine.check_set(
+        prepared.schema,
+        prepared.reader,
+        prepared.revision,
+        type,
+        ids,
+        permission,
+        subject,
+        prepared.opts
+      )
+
+    Map.new(checks, fn {resource, _permission, _subject} = check ->
+      {check, bulk_store(prepared, check, Map.fetch!(results, resource.id))}
+    end)
+  end
+
+  defp bulk_store(_prepared, _check, {:error, error}), do: {:error, error}
+  defp bulk_store(%{revision: %{cache?: false}}, _check, answer), do: {:ok, answer}
+
+  defp bulk_store(prepared, check, answer),
+    do: Dispatch.put(prepared.config.name, cache_key(prepared, check), {:ok, answer})
 
   defp object(value, allow_wildcard) do
     case Relationship.parse_object(value) do

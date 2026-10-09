@@ -21,7 +21,7 @@ defmodule Licet.SpiceDBLiveCorpusTest do
   @moduletag :spicedb
   @moduletag timeout: 600_000
 
-  @opts [timeout: 30_000, parallel: nil]
+  @opts [timeout: 30_000]
 
   setup_all do
     Application.ensure_all_started(:req)

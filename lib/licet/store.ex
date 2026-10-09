@@ -31,7 +31,7 @@ defmodule Licet.Store do
     WHERE #{visible()} #{extra}
     """
 
-    %{rows: rows} = query!(repo, sql, params)
+    %{rows: rows} = query!(repo, sql, params, cache_statement: statement_name(sql))
     Enum.map(rows, &row_to_relationship/1)
   end
 
@@ -552,8 +552,14 @@ defmodule Licet.Store do
 
     Enum.reduce(fields, {"", params}, fn field, {sql, acc} ->
       case Map.get(filter, field) do
-        nil -> {sql, acc}
-        value -> {sql <> " AND #{field} = $#{length(acc) + 1}", acc ++ [value]}
+        nil ->
+          {sql, acc}
+
+        values when is_list(values) ->
+          {sql <> " AND #{field} = ANY($#{length(acc) + 1})", acc ++ [values]}
+
+        value ->
+          {sql <> " AND #{field} = $#{length(acc) + 1}", acc ++ [value]}
       end
     end)
   end
@@ -611,8 +617,15 @@ defmodule Licet.Store do
     end
   end
 
-  defp query(repo, sql, params) do
-    case SQL.query(repo, sql, params) do
+  # Named from the exact SQL so document and folder ids share a statement,
+  # and a different filter shape (or prefix) gets its own.
+  defp statement_name(sql) do
+    hash = sql |> :erlang.phash2() |> Integer.to_string(16)
+    "licet_rel_" <> hash
+  end
+
+  defp query(repo, sql, params, opts \\ []) do
+    case SQL.query(repo, sql, params, opts) do
       {:ok, result} -> {:ok, result}
       {:error, error} -> exception_result(error)
     end
@@ -639,8 +652,8 @@ defmodule Licet.Store do
 
   def exception_result(other), do: raise(other)
 
-  defp query!(repo, sql, params) do
-    case query(repo, sql, params) do
+  defp query!(repo, sql, params, opts \\ []) do
+    case query(repo, sql, params, opts) do
       {:ok, result} -> result
       {:error, error} -> raise error
     end

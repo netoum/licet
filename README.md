@@ -2,6 +2,8 @@
 
 Fine-grained authorization for Elixir, in your own Postgres database.
 
+*Licet* is Latin for "it is permitted".
+
 Licet answers questions like "can Ada edit this document?" from relationships you store: Ada owns the folder, the folder contains the document, owners of a folder can edit what's in it. This model is relationship-based access control (ReBAC), the approach described in Google's [Zanzibar paper](https://research.google/pubs/zanzibar-googles-consistent-global-authorization-system/). Licet uses the schema language of [SpiceDB](https://authzed.com/docs/spicedb), the best-known open-source Zanzibar implementation, and evaluates it inside your application, with the relationships stored next to the rest of your data.
 
 > Licet is pre-release (0.0.x). The API may change before 0.1. See the [changelog](CHANGELOG.md).

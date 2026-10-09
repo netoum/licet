@@ -51,6 +51,9 @@ defmodule Licet.EngineTest do
              check("document:1#owner@user:ada", "document:1", "secret", "user:ada")
 
     assert {:ok, :denied} = check(tuples, "document:1", "secret", "user:ada")
+
+    assert {:ok, :allowed, %{result: :allowed}} =
+             explain(tuples, "document:1", "share", "user:ada")
   end
 
   test "reports unknown types, cycles, depth, and timeout" do
@@ -85,72 +88,70 @@ defmodule Licet.EngineTest do
     assert MapSet.member?(ids, "2")
   end
 
-  test "runs arrow targets in parallel and collects exits" do
-    tuples = [
-      "document:1#parent@document:2",
-      "document:1#parent@document:3",
-      "document:2#owner@user:ada"
-    ]
+  test "explain follows the same rules as check" do
+    {:ok, schema} =
+      Licet.Schema.parse("""
+      definition user {}
+      definition team {
+        relation member: user
+      }
+      definition folder {
+        relation viewer: user
+      }
+      definition document {
+        relation parent: folder | team
+        permission none = nil
+        permission every = parent.all(viewer)
+        permission through = parent->viewer
+      }
+      """)
 
-    {:ok, schema} = Licet.Schema.parse(@schema)
-    reader = reader(tuples)
-    start_supervised!({Task.Supervisor, name: Licet.EngineTest.Tasks})
-
-    assert {:ok, :allowed} =
-             Licet.Engine.check(
-               schema,
-               reader,
-               revision(),
-               resource("document:1"),
-               "view",
-               subject("user:ada"),
-               parallel: %{supervisor: Licet.EngineTest.Tasks, repo: nil}
-             )
-
-    assert {:error, %{reason: :timeout}} = Licet.Engine.collect([{:exit, :timeout}])
-    assert {:ok, :allowed} = Licet.Engine.collect([{:ok, {:ok, :allowed}}])
-    assert {:ok, :denied} = Licet.Engine.collect([{:ok, {:ok, :denied}}])
-
-    assert {:error, %{reason: :cycle}} =
-             Licet.Engine.collect([{:ok, {:error, Licet.Error.new(:cycle, "cycle")}}])
-
-    assert {:ok, :denied} = Licet.Engine.collect([{:ok, {:ok, :denied, []}}])
-  end
-
-  test "a settled parallel check cancels its siblings at their next step" do
-    {:ok, schema} = Licet.Schema.parse(@schema)
-
-    memory =
+    tuples =
       reader([
-        "document:1#parent@document:2",
-        "document:1#parent@document:3",
-        "document:2#owner@user:ada",
-        "document:3#parent@document:4"
+        "document:1#parent@folder:f1",
+        "document:1#parent@folder:f2",
+        "document:2#parent@team:eng",
+        "folder:f1#viewer@user:ada",
+        "folder:f2#viewer@user:ada"
       ])
 
-    reader = %Licet.SlowReader{memory: memory, test: self(), slow: "3"}
-    start_supervised!({Task.Supervisor, name: Licet.EngineTest.CancelTasks})
+    explain = fn resource, permission, subject ->
+      Licet.Engine.explain(
+        schema,
+        tuples,
+        revision(),
+        resource(resource),
+        permission,
+        subject(subject)
+      )
+    end
 
-    assert {:ok, :allowed} =
-             Licet.Engine.check(
-               schema,
-               reader,
+    assert {:ok, :allowed, _} = explain.("document:1", "every", "user:ada")
+    assert {:ok, :denied, _} = explain.("document:2", "through", "user:ada")
+    assert {:ok, :denied, _} = explain.("document:1", "none", "user:ada")
+    assert {:ok, :allowed, _} = explain.("team:eng", "member", "team:eng#member")
+    assert {:error, %{reason: :unknown_relation}} = explain.("document:1", "missing", "user:ada")
+
+    odd = %{
+      definitions: %{
+        "document" => %{
+          relations: %{"owner" => %{}},
+          permissions: %{
+            "view" => {:arrow, {:union, {:ref, "owner"}, {:ref, "owner"}}, {:ref, "owner"}}
+          }
+        }
+      }
+    }
+
+    assert {:ok, :denied, _} =
+             Licet.Engine.explain(
+               odd,
+               reader([]),
                revision(),
                resource("document:1"),
                "view",
-               subject("user:ada"),
-               parallel: %{supervisor: Licet.EngineTest.CancelTasks, repo: nil}
+               subject("user:ada")
              )
-
-    refute_received {:listed, "4"}
-
-    cancel = :atomics.new(1, [])
-    error = Licet.Error.new(:cycle, "cycle")
-
-    assert {:ok, :allowed} =
-             Licet.Engine.collect([{:ok, {:ok, :allowed}}, {:ok, {:error, error}}], cancel)
-
-    assert :atomics.get(cancel, 1) == 1
   end
 
   test "an arrow to a type the schema does not define reports the type" do

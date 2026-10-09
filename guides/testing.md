@@ -50,7 +50,7 @@ The tables are created inside the test's sandbox transaction, so they disappear 
 
 ## Processes and the sandbox
 
-Licet can evaluate the branches of an arrow in parallel, in separate processes. They need access to the test's sandbox connection, which Licet grants through `Licet.Testing.allow/3` automatically. Use the same function when your own code calls Licet from a process the test spawned:
+Licet runs its queries in the calling process, so a check from the test process uses the test's sandbox connection. When your own code calls Licet from a process the test spawned, give that process access with `Licet.Testing.allow/3`:
 
 ```elixir
 test_pid = self()

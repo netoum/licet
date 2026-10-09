@@ -92,9 +92,7 @@ defmodule Licet.Differential do
     resource = %{type: rel.resource_type, id: rel.resource_id, relation: ""}
     subject = %{type: rel.subject_type, id: rel.subject_id, relation: rel.subject_relation}
 
-    case Licet.Engine.check(schema, reader, revision, resource, rel.relation, subject,
-           parallel: nil
-         ) do
+    case Licet.Engine.check(schema, reader, revision, resource, rel.relation, subject) do
       {:ok, answer} -> {:ok, answer == :allowed}
       {:error, error} -> {:error, error}
     end
