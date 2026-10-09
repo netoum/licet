@@ -2,6 +2,16 @@ defmodule Licet.SubjectsTest do
   use ExUnit.Case, async: true
 
   alias Licet.Engine.Subjects
+  alias Licet.Reader.Memory
+  alias Licet.Reader.Postgres
+  alias Licet.Relationship
+
+  test "default struct builders run" do
+    assert %Subjects{} = Subjects.__struct__(concrete: %{})
+    assert %Memory{tuples: []} = Memory.__struct__(tuples: [])
+    assert %Postgres{} = Postgres.__struct__([])
+    assert %Relationship{} = Relationship.__struct__([])
+  end
 
   test "unions, intersects, and subtracts wildcards" do
     all = Subjects.allow_all(Subjects.empty(), "user")

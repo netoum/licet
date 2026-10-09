@@ -10,23 +10,30 @@ defmodule Licet.Differential do
   end
 
   defp compare do
+    Application.ensure_all_started(:req)
     count = System.get_env("LICET_DIFFERENTIAL_CASES", "100") |> String.to_integer()
     url = System.get_env("LICET_SPICEDB_URL", "http://127.0.0.1:8443")
+    schema = schema()
 
+    with {:ok, compiled} <- Licet.Schema.parse(schema),
+         :ok <- spice_schema(url, schema) do
+      run_cases(url, compiled, count)
+    end
+  end
+
+  defp run_cases(url, compiled, count) do
     Enum.reduce_while(1..count, :ok, fn index, :ok ->
-      case one(url, index) do
+      case one(url, compiled, index) do
         :ok -> {:cont, :ok}
         {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
   end
 
-  defp one(url, index) do
-    {schema, relationships, assertion} = case_for(index)
+  defp one(url, compiled, index) do
+    {relationships, assertion} = case_for(index)
 
-    with {:ok, compiled} <- Licet.Schema.parse(schema),
-         {:ok, tuples} <- tuples(relationships),
-         :ok <- spice_schema(url, schema),
+    with {:ok, tuples} <- tuples(relationships),
          :ok <- spice_write(url, relationships),
          {:ok, spice} <- spice_check(url, assertion),
          {:ok, licet} <- licet_check(compiled, tuples, assertion) do
@@ -38,12 +45,8 @@ defmodule Licet.Differential do
     end
   end
 
-  defp case_for(index) do
-    anne = rem(index, 3) == 0
-    bob = rem(index, 5) == 0
-    parent = rem(index, 7) == 0
-
-    schema = """
+  defp schema do
+    """
     definition user {}
     definition document {
       relation owner: user
@@ -52,6 +55,12 @@ defmodule Licet.Differential do
       permission view = owner + viewer + parent->view
     }
     """
+  end
+
+  defp case_for(index) do
+    anne = rem(index, 3) == 0
+    bob = rem(index, 5) == 0
+    parent = rem(index, 7) == 0
 
     relationships =
       ["document:doc#{index}#owner@user:ada"] ++
@@ -62,7 +71,7 @@ defmodule Licet.Differential do
         )
 
     subject = if anne, do: "user:ada", else: "user:bob"
-    {schema, relationships, "document:doc#{index}#view@#{subject}"}
+    {relationships, "document:doc#{index}#view@#{subject}"}
   end
 
   defp tuples(lines) do
