@@ -109,8 +109,8 @@ By default a check reads a snapshot that is refreshed every few seconds and shar
 
 ## Examples
 
-* [`examples/blog`](examples/blog) — a small Phoenix JSON API with Postgres: create a post and its owner in one transaction, then fetch and list with `Licet.check/5` and `Licet.check_bulk/3`.
-* [`examples/playground`](examples/playground) — a local SpiceDB validation-file editor. It needs no database: assertions and expected relations run through `Licet.Validate`, and you can explain one check as you type.
+* [`examples/blog`](examples/blog/README.md) — a small Phoenix JSON API with Postgres: create a post and its owner in one transaction, then fetch and list with `Licet.check/5` and `Licet.check_bulk/3`.
+* [`examples/playground`](examples/playground/README.md) — a local SpiceDB validation-file editor. It needs no database: assertions and expected relations run through `Licet.Validate`, and you can explain one check as you type.
 
 ## Documentation
 
