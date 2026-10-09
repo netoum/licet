@@ -2,6 +2,7 @@ defmodule Licet.Schema.Validator do
   @moduledoc false
 
   alias Licet.Relationship
+  alias Licet.Schema.Compiler
   alias Licet.Schema.Location
 
   @spec validate([term()], binary()) :: {:ok, map()} | {:error, [map()]}
@@ -425,7 +426,7 @@ defmodule Licet.Schema.Validator do
   end
 
   defp schema(definitions, expiration, source) do
-    Licet.Schema.Compiler.compile(definitions, expiration, source)
+    Compiler.compile(definitions, expiration, source)
   end
 
   defp err(source, offset, message) do

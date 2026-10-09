@@ -3,9 +3,11 @@ defmodule Licet.Store do
   Postgres storage for relationships, schema versions, and revision snapshots.
   """
 
+  alias Ecto.Adapters.SQL
   alias Licet.Error
   alias Licet.Relationship
   alias Licet.Rules
+  alias Licet.Schema.Diff
   alias Licet.Token
 
   @prefix ~r/^[a-z_][a-z0-9_]{0,62}$/
@@ -74,10 +76,11 @@ defmodule Licet.Store do
     sql =
       "SELECT source FROM #{prefix}.schemas WHERE deleted_xid IS NULL ORDER BY version DESC LIMIT 1"
 
-    case query(repo, sql, []) do
-      {:ok, %{rows: [[source]]}} -> {:ok, source}
-      {:ok, %{rows: []}} -> {:ok, nil}
-      {:error, error} -> {:error, error}
+    with {:ok, %{rows: rows}} <- query(repo, sql, []) do
+      case rows do
+        [[source]] -> {:ok, source}
+        [] -> {:ok, nil}
+      end
     end
   end
 
@@ -96,18 +99,11 @@ defmodule Licet.Store do
   def ensure_compatible(_repo, _prefix, nil, _new), do: :ok
 
   def ensure_compatible(repo, prefix, old, new) do
-    changes = Licet.Schema.Diff.changes(old, new)
+    changes = Diff.changes(old, new)
 
-    reason =
-      definition_conflict(repo, prefix, changes) ||
-        relation_conflict(repo, prefix, changes) ||
-        expiration_conflict(repo, prefix, changes) ||
-        narrowed_conflict(repo, prefix, old, new, changes)
-
-    if reason do
-      {:error, Error.new(:unsafe_schema_change, reason)}
-    else
-      :ok
+    case conflict(repo, prefix, old, new, changes) do
+      nil -> :ok
+      reason -> {:error, Error.new(:unsafe_schema_change, reason)}
     end
   end
 
@@ -116,20 +112,16 @@ defmodule Licet.Store do
     sql =
       "SELECT pg_current_snapshot()::text, clock_timestamp(), COALESCE(pg_current_xact_id_if_assigned()::text, '')"
 
-    case query(repo, sql, []) do
-      {:ok, %{rows: [[snapshot, at, own]]}} ->
-        {:ok, %{snapshot: snapshot, at: at, own_xid: own, xid: own}}
-
-      {:error, error} ->
-        {:error, error}
+    with {:ok, %{rows: [[snapshot, at, own]]}} <- query(repo, sql, []) do
+      {:ok, %{snapshot: snapshot, at: at, own_xid: own, xid: own}}
     end
   end
 
   @spec xact_status(module(), String.t()) :: {:ok, String.t() | nil} | {:error, Error.t()}
   def xact_status(repo, xid) do
-    case query(repo, "SELECT pg_xact_status($1::text::xid8)::text", [xid]) do
-      {:ok, %{rows: [[status]]}} -> {:ok, status}
-      {:error, error} -> {:error, error}
+    with {:ok, %{rows: [[status]]}} <-
+           query(repo, "SELECT pg_xact_status($1::text::xid8)::text", [xid]) do
+      {:ok, status}
     end
   end
 
@@ -141,15 +133,8 @@ defmodule Licet.Store do
     sql =
       "SELECT snapshot::text, inserted_at FROM #{prefix}.transactions WHERE xid = $1::text::xid8"
 
-    case query(repo, sql, [xid]) do
-      {:ok, %{rows: [[snapshot, at]]}} ->
-        {:ok, %{snapshot: snapshot, at: at, xid: xid, own_xid: xid}}
-
-      {:ok, %{rows: []}} ->
-        {:ok, nil}
-
-      {:error, error} ->
-        {:error, error}
+    with {:ok, %{rows: rows}} <- query(repo, sql, [xid]) do
+      transaction_row(rows, xid)
     end
   end
 
@@ -157,9 +142,8 @@ defmodule Licet.Store do
   def xid_visible?(repo, xid, snapshot) do
     sql = "SELECT pg_visible_in_snapshot($1::text::xid8, $2::text::pg_snapshot)"
 
-    case query(repo, sql, [xid, snapshot]) do
-      {:ok, %{rows: [[visible]]}} -> {:ok, visible}
-      {:error, error} -> {:error, error}
+    with {:ok, %{rows: [[visible]]}} <- query(repo, sql, [xid, snapshot]) do
+      {:ok, visible}
     end
   end
 
@@ -169,17 +153,15 @@ defmodule Licet.Store do
 
     with {:ok, xmin} <- horizon(repo, prefix, window),
          :ok <- delete_batches(repo, prefix, tombstone_sql(prefix), [xmin, batch]),
-         :ok <- delete_batches(repo, prefix, expired_sql(prefix), [window, batch]),
-         :ok <- delete_batches(repo, prefix, transaction_sql(prefix), [window, batch]) do
-      :ok
+         :ok <- delete_batches(repo, prefix, expired_sql(prefix), [window, batch]) do
+      delete_batches(repo, prefix, transaction_sql(prefix), [window, batch])
     end
   end
 
   @spec try_lock(module(), integer()) :: {:ok, boolean()} | {:error, Error.t()}
   def try_lock(repo, key) do
-    case query(repo, "SELECT pg_try_advisory_lock($1::bigint)", [key]) do
-      {:ok, %{rows: [[got]]}} -> {:ok, got}
-      {:error, error} -> {:error, error}
+    with {:ok, %{rows: [[got]]}} <- query(repo, "SELECT pg_try_advisory_lock($1::bigint)", [key]) do
+      {:ok, got}
     end
   end
 
@@ -198,10 +180,12 @@ defmodule Licet.Store do
   end
 
   defp insert_transaction(repo, prefix, revision, metadata) do
-    case fetch_transaction(repo, prefix, revision.xid) do
-      {:ok, nil} -> insert_transaction_row(repo, prefix, revision, metadata)
-      {:ok, _row} -> :ok
-      {:error, error} -> {:error, error}
+    with {:ok, row} <- fetch_transaction(repo, prefix, revision.xid) do
+      if row do
+        :ok
+      else
+        insert_transaction_row(repo, prefix, revision, metadata)
+      end
     end
   end
 
@@ -213,9 +197,14 @@ defmodule Licet.Store do
     VALUES ($1::text::xid8, $2::text::pg_snapshot, $3, $4::jsonb)
     """
 
-    case query(repo, sql, [revision.xid, revision.snapshot, revision.at, Jason.encode!(metadata)]) do
-      {:ok, _} -> :ok
-      {:error, error} -> {:error, error}
+    with {:ok, _} <-
+           query(repo, sql, [
+             revision.xid,
+             revision.snapshot,
+             revision.at,
+             Jason.encode!(metadata)
+           ]) do
+      :ok
     end
   end
 
@@ -297,15 +286,8 @@ defmodule Licet.Store do
       revision.xid
     ]
 
-    case query(repo, sql, params) do
-      {:ok, _} ->
-        :ok
-
-      {:error, %Error{reason: :already_exists}} ->
-        {:error, Error.new(:already_exists, "relationship already exists")}
-
-      {:error, error} ->
-        {:error, error}
+    with {:ok, _} <- query(repo, sql, params) do
+      :ok
     end
   end
 
@@ -356,9 +338,8 @@ defmodule Licet.Store do
       rel.subject_relation
     ]
 
-    case query(repo, sql, params) do
-      {:ok, _} -> :ok
-      {:error, error} -> {:error, error}
+    with {:ok, _} <- query(repo, sql, params) do
+      :ok
     end
   end
 
@@ -370,9 +351,8 @@ defmodule Licet.Store do
     sql =
       "UPDATE #{prefix}.relationships SET deleted_xid = $1::text::xid8 WHERE deleted_xid IS NULL #{extra}"
 
-    case query(repo, sql, params) do
-      {:ok, _} -> :ok
-      {:error, error} -> {:error, error}
+    with {:ok, _} <- query(repo, sql, params) do
+      :ok
     end
   end
 
@@ -380,9 +360,8 @@ defmodule Licet.Store do
     prefix = prefix!(prefix)
     sql = "UPDATE #{prefix}.schemas SET deleted_xid = $1::text::xid8 WHERE deleted_xid IS NULL"
 
-    case query(repo, sql, [xid]) do
-      {:ok, _} -> :ok
-      {:error, error} -> {:error, error}
+    with {:ok, _} <- query(repo, sql, [xid]) do
+      :ok
     end
   end
 
@@ -392,9 +371,8 @@ defmodule Licet.Store do
     sql =
       "INSERT INTO #{prefix}.schemas (source, hash, created_xid) VALUES ($1, $2, $3::text::xid8)"
 
-    case query(repo, sql, [source, hash, xid]) do
-      {:ok, _} -> :ok
-      {:error, error} -> {:error, error}
+    with {:ok, _} <- query(repo, sql, [source, hash, xid]) do
+      :ok
     end
   end
 
@@ -405,6 +383,22 @@ defmodule Licet.Store do
       with :ok <- tombstone(repo, prefix, revision.xid, rel) do
         insert_row(repo, prefix, revision, rel)
       end
+    end
+  end
+
+  defp transaction_row([[snapshot, at]], xid) do
+    {:ok, %{snapshot: snapshot, at: at, xid: xid, own_xid: xid}}
+  end
+
+  defp transaction_row([], _xid), do: {:ok, nil}
+
+  defp conflict(repo, prefix, old, new, changes) do
+    cond do
+      reason = definition_conflict(repo, prefix, changes) -> reason
+      reason = relation_conflict(repo, prefix, changes) -> reason
+      reason = expiration_conflict(repo, prefix, changes) -> reason
+      reason = narrowed_conflict(repo, prefix, old, new, changes) -> reason
+      true -> nil
     end
   end
 
@@ -484,9 +478,8 @@ defmodule Licet.Store do
     )::text
     """
 
-    case query(repo, sql, [window]) do
-      {:ok, %{rows: [[xmin]]}} -> {:ok, xmin}
-      {:error, error} -> {:error, error}
+    with {:ok, %{rows: [[xmin]]}} <- query(repo, sql, [window]) do
+      {:ok, xmin}
     end
   end
 
@@ -620,7 +613,7 @@ defmodule Licet.Store do
   end
 
   defp query(repo, sql, params) do
-    case Ecto.Adapters.SQL.query(repo, sql, params) do
+    case SQL.query(repo, sql, params) do
       {:ok, result} -> {:ok, result}
       {:error, error} -> exception_result(error)
     end
@@ -629,7 +622,11 @@ defmodule Licet.Store do
   @doc false
   @spec exception_result(term()) :: {:error, Error.t()}
   def exception_result(%Postgrex.Error{postgres: %{code: code}})
-      when code in [:invalid_text_representation, :invalid_binary_representation] do
+      when code in [
+             :invalid_text_representation,
+             :invalid_binary_representation,
+             :invalid_parameter_value
+           ] do
     {:error, Error.new(:token_invalid, "token is invalid")}
   end
 

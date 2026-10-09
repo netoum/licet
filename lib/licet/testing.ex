@@ -3,6 +3,7 @@ defmodule Licet.Testing do
   Helpers for exercising Licet in tests.
   """
 
+  alias Ecto.Adapters.SQL.Sandbox
   alias Licet.Migration
 
   @doc """
@@ -18,8 +19,8 @@ defmodule Licet.Testing do
   """
   @spec allow(module(), pid(), pid()) :: :ok
   def allow(repo, parent, pid) do
-    if repo.config()[:pool] == Ecto.Adapters.SQL.Sandbox do
-      _ = Ecto.Adapters.SQL.Sandbox.allow(repo, parent, pid)
+    if repo.config()[:pool] == Sandbox do
+      _ = Sandbox.allow(repo, parent, pid)
     end
 
     :ok

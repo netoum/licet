@@ -3,6 +3,8 @@ defmodule Licet.SchemaTest do
   use ExUnitProperties
   import StreamData
 
+  alias Licet.Schema.Diff
+
   @sample """
   use expiration
   // comment
@@ -65,6 +67,10 @@ defmodule Licet.SchemaTest do
     assert {:error, _} = Licet.Schema.parse("definition user {}\nnope")
     assert {:error, _} = Licet.Schema.parse("definition {")
     assert {:error, _} = Licet.Schema.parse("definition user { relation }")
+    assert {:error, %{message: message}} = Licet.Schema.parse("definition user { nope }")
+    assert message =~ "relation, permission, or }"
+    assert {:error, _} = Licet.Schema.parse("definition user { relation owner user }")
+    assert {:error, _} = Licet.Schema.parse("definition user { relation owner")
 
     assert {:error, _} =
              Licet.Schema.parse(
@@ -145,13 +151,38 @@ defmodule Licet.SchemaTest do
     assert Licet.Schema.to_zed(nested_schema) =~ "("
   end
 
+  test "rejects arrows that do not start at a relation" do
+    arrow = """
+    definition user {}
+    definition document {
+      permission edit = owner
+      relation parent: document
+      relation owner: user
+      permission view = parent->edit->owner
+      permission broken = missing->parent->owner
+      permission mixed = (owner + viewer)->edit
+    }
+    """
+
+    assert {:error, %{message: message}} = Licet.Schema.parse(arrow)
+    assert message =~ "relation"
+  end
+
   test "diffs unsafe schema edits" do
     {:ok, old} = Licet.Schema.parse(@sample)
     {:ok, newer} = Licet.Schema.parse("definition user {}")
-    changes = Licet.Schema.Diff.changes(old, newer)
+    changes = Diff.changes(old, newer)
     assert "document" in changes.removed_definitions
     assert changes.dropped_expiration
-    assert Licet.Schema.Diff.changes(nil, newer).removed_definitions == []
+    assert Diff.changes(nil, newer).removed_definitions == []
+  end
+
+  test "rejects incomplete relationship text" do
+    assert {:error, %{reason: :invalid_relationship}} =
+             Licet.Relationship.parse("document:1#owner")
+
+    assert {:error, _} = Licet.Relationship.parse("document:1#owner@user#member")
+    assert {:error, _} = Licet.Relationship.parse("document:1#owner@nocolon")
   end
 
   property "relationship text round-trips" do

@@ -25,5 +25,6 @@ defmodule Licet.SubjectsTest do
     excluded = Subjects.difference(all, ada)
     other = Subjects.difference(all, bob)
     assert Subjects.to_list(Subjects.union(excluded, other)) == [{"user", "*", ""}]
+    assert Subjects.to_list(Subjects.union(excluded, ada)) == [{"user", "*", ""}]
   end
 end

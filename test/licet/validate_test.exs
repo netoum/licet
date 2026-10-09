@@ -1,9 +1,12 @@
 defmodule Licet.ValidateTest do
   use ExUnit.Case, async: false
 
+  alias Ecto.Adapters.SQL.Sandbox
+  alias Ecto.Migration.Runner
+
   setup do
-    owner = Ecto.Adapters.SQL.Sandbox.start_owner!(Licet.TestRepo, shared: true)
-    on_exit(fn -> Ecto.Adapters.SQL.Sandbox.stop_owner(owner) end)
+    owner = Sandbox.start_owner!(Licet.TestRepo, shared: true)
+    on_exit(fn -> Sandbox.stop_owner(owner) end)
     :ok
   end
 
@@ -54,15 +57,15 @@ defmodule Licet.ValidateTest do
       def down, do: Licet.Migration.down(prefix: "licet_cover_mig")
     end
 
-    Ecto.Adapters.SQL.Sandbox.unboxed_run(Licet.TestRepo, fn ->
-      Ecto.Migration.Runner.run(Licet.TestRepo, [], 1, UpDown, :forward, :up, :up, log: false)
+    Sandbox.unboxed_run(Licet.TestRepo, fn ->
+      Runner.run(Licet.TestRepo, [], 1, UpDown, :forward, :up, :up, log: false)
 
       assert %{num_rows: 1} =
                Licet.TestRepo.query!(
                  "SELECT 1 FROM information_schema.schemata WHERE schema_name = 'licet_cover_mig'"
                )
 
-      Ecto.Migration.Runner.run(Licet.TestRepo, [], 1, UpDown, :forward, :down, :down, log: false)
+      Runner.run(Licet.TestRepo, [], 1, UpDown, :forward, :down, :down, log: false)
 
       defmodule Defaults do
         use Ecto.Migration
@@ -71,11 +74,9 @@ defmodule Licet.ValidateTest do
         def down, do: Licet.Migration.down()
       end
 
-      Ecto.Migration.Runner.run(Licet.TestRepo, [], 2, Defaults, :forward, :up, :up, log: false)
+      Runner.run(Licet.TestRepo, [], 2, Defaults, :forward, :up, :up, log: false)
 
-      Ecto.Migration.Runner.run(Licet.TestRepo, [], 2, Defaults, :forward, :down, :down,
-        log: false
-      )
+      Runner.run(Licet.TestRepo, [], 2, Defaults, :forward, :down, :down, log: false)
     end)
   end
 end

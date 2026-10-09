@@ -1,6 +1,8 @@
 defmodule Licet.GapsTest do
   use ExUnit.Case, async: true
 
+  alias Licet.Schema.Validator
+
   test "dispatch deduplicates, times out, and keeps errors" do
     name = Module.concat(Licet.Gaps, "I" <> Integer.to_string(System.unique_integer([:positive])))
     start_supervised!({Licet.Cache, %{name: name}})
@@ -191,8 +193,61 @@ defmodule Licet.GapsTest do
     }
 
     assert {:error, errors} =
-             Licet.Schema.Validator.validate([:use_expiration, :use_expiration, definition], "x")
+             Validator.validate([:use_expiration, :use_expiration, definition], "x")
 
     assert errors != []
+
+    invalid = %{
+      kind: :definition,
+      name: "Bad",
+      offset: 0,
+      segments: [],
+      members: [
+        %{
+          name: "ab",
+          offset: 1,
+          subjects: [
+            %{
+              type: "Bad",
+              offset: 2,
+              wildcard: false,
+              relation: "ab",
+              expiration: false
+            }
+          ]
+        },
+        %{kind: :permission, name: "xy", offset: 3, expr: {:name, "ab", 4}}
+      ]
+    }
+
+    assert {:error, name_errors} = Validator.validate([invalid], "x")
+    assert name_errors != []
+  end
+
+  test "recomputes a check when the owner exits before storing" do
+    name = Module.concat(Licet.Gaps, "D" <> Integer.to_string(System.unique_integer([:positive])))
+    start_supervised!({Licet.Cache, %{name: name}})
+    start_supervised!({Registry, keys: :unique, name: Module.concat(name, Registry)})
+    parent = self()
+
+    holder =
+      spawn(fn ->
+        Licet.Dispatch.compute(name, :die, 1_000, fn ->
+          send(parent, :dying)
+          Process.sleep(5_000)
+          {:ok, :allowed}
+        end)
+      end)
+
+    assert_receive :dying
+
+    waiter =
+      Task.async(fn ->
+        Licet.Dispatch.compute(name, :die, 1_000, fn -> {:ok, :fresh} end)
+      end)
+
+    Process.sleep(50)
+    Process.exit(holder, :kill)
+    assert {:ok, :fresh} = Task.await(waiter)
   end
 end

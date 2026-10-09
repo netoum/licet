@@ -19,9 +19,11 @@ defmodule Licet do
 
   use Supervisor
 
+  alias Ecto.Adapters.SQL
   alias Licet.Config
   alias Licet.Dispatch
   alias Licet.Engine
+  alias Licet.Engine.Subjects
   alias Licet.Error
   alias Licet.Reader.Postgres
   alias Licet.Relationship
@@ -188,11 +190,7 @@ defmodule Licet do
       metadata = Keyword.get(opts, :metadata, %{})
 
       result =
-        transact(config.repo, fn ->
-          with :ok <- Store.ensure_compatible(config.repo, config.prefix, old, parsed) do
-            Store.write_schema(config.repo, config.prefix, source, parsed.hash, metadata)
-          end
-        end)
+        transact(config.repo, fn -> store_schema(config, old, parsed, source, metadata) end)
 
       case result do
         {:ok, token} ->
@@ -222,16 +220,14 @@ defmodule Licet do
          {:ok, schema} <- SchemaServer.get(name),
          {:ok, normalized} <- normalize_updates(updates),
          {:ok, preconditions} <- normalize_preconditions(opts) do
-      metadata = Keyword.get(opts, :metadata, %{})
-
-      :telemetry.span([:licet, :write], %{count: length(updates)}, fn ->
-        result =
-          transact(config.repo, fn ->
-            Store.write(config.repo, config.prefix, normalized, preconditions, metadata, schema)
-          end)
-
-        {result, %{count: length(updates)}}
-      end)
+      span_write(
+        config,
+        updates,
+        normalized,
+        preconditions,
+        Keyword.get(opts, :metadata, %{}),
+        schema
+      )
     end
   end
 
@@ -277,7 +273,7 @@ defmodule Licet do
              permission,
              prepared.opts
            ) do
-      rendered = Enum.map(Licet.Engine.Subjects.to_list(set), &format_subject/1)
+      rendered = Enum.map(Subjects.to_list(set), &format_subject/1)
       Licet.Page.slice(rendered, Keyword.get(opts, :cursor), Keyword.get(opts, :limit, 100))
     end
   end
@@ -350,13 +346,12 @@ defmodule Licet do
       {:ok, type, id, relation} ->
         {:ok, %{type: type, id: id, relation: relation}}
 
-      {:error, error} ->
+      {:error, %Error{} = error} ->
         {:error, error}
     end
   end
 
-  defp format_subject({type, id, ""}), do: type <> ":" <> id
-  defp format_subject({type, id, relation}), do: type <> ":" <> id <> "#" <> relation
+  defp format_subject({type, id, _relation}), do: type <> ":" <> id
 
   defp normalize_updates(updates) do
     Enum.reduce_while(updates, {:ok, []}, fn update, {:ok, acc} ->
@@ -395,12 +390,13 @@ defmodule Licet do
   end
 
   defp current_parsed(config) do
-    case Store.current_schema(config.repo, config.prefix) do
-      {:ok, nil} -> {:ok, nil}
-      {:ok, source} -> Licet.Schema.parse(source)
-      {:error, error} -> {:error, error}
+    with {:ok, source} <- Store.current_schema(config.repo, config.prefix) do
+      parse_current(source)
     end
   end
+
+  defp parse_current(nil), do: {:ok, nil}
+  defp parse_current(source), do: Licet.Schema.parse(source)
 
   defp within(list, max) do
     if length(list) > max do
@@ -438,6 +434,25 @@ defmodule Licet do
   defp in_transaction?(repo) do
     repo
     |> Ecto.Adapter.lookup_meta()
-    |> Ecto.Adapters.SQL.in_transaction?()
+    |> SQL.in_transaction?()
+  end
+
+  defp store_schema(config, old, parsed, source, metadata) do
+    with :ok <- Store.ensure_compatible(config.repo, config.prefix, old, parsed) do
+      Store.write_schema(config.repo, config.prefix, source, parsed.hash, metadata)
+    end
+  end
+
+  defp span_write(config, updates, normalized, preconditions, metadata, schema) do
+    :telemetry.span([:licet, :write], %{count: length(updates)}, fn ->
+      result = write_rows(config, normalized, preconditions, metadata, schema)
+      {result, %{count: length(updates)}}
+    end)
+  end
+
+  defp write_rows(config, normalized, preconditions, metadata, schema) do
+    transact(config.repo, fn ->
+      Store.write(config.repo, config.prefix, normalized, preconditions, metadata, schema)
+    end)
   end
 end

@@ -3,6 +3,8 @@ defmodule Licet.Revision do
 
   use GenServer
 
+  alias Ecto.Adapters.SQL
+  alias Ecto.Adapters.SQL.Sandbox
   alias Licet.Error
   alias Licet.Store
   alias Licet.Token
@@ -17,29 +19,21 @@ defmodule Licet.Revision do
 
   @spec resolve(map(), term()) :: {:ok, map()} | {:error, Error.t()}
   def resolve(config, consistency) do
-    cond do
-      exact?(consistency) ->
-        exact(config, elem(consistency, 1))
-
-      true ->
-        case open_revision(config) do
-          {:ok, revision} -> {:ok, revision}
-          :closed -> closed_revision(config, consistency)
-          {:error, error} -> {:error, error}
-        end
+    if exact?(consistency) do
+      exact(config, elem(consistency, 1))
+    else
+      case open_revision(config) do
+        {:ok, revision} -> {:ok, revision}
+        :closed -> closed_revision(config, consistency)
+      end
     end
   end
 
   @impl true
   def init(config) do
-    case Store.current_revision(config.repo) do
-      {:ok, revision} ->
-        schedule(config)
-        {:ok, %{config: config, revision: blank_xid(revision)}}
-
-      {:error, error} ->
-        {:stop, error}
-    end
+    {:ok, revision} = Store.current_revision(config.repo)
+    schedule(config)
+    {:ok, %{config: config, revision: blank_xid(revision)}}
   end
 
   @impl true
@@ -64,10 +58,8 @@ defmodule Licet.Revision do
   end
 
   defp refresh(state) do
-    case Store.current_revision(state.config.repo) do
-      {:ok, revision} -> blank_xid(revision)
-      {:error, _error} -> state.revision
-    end
+    {:ok, revision} = Store.current_revision(state.config.repo)
+    blank_xid(revision)
   end
 
   defp schedule(config) do
@@ -75,9 +67,8 @@ defmodule Licet.Revision do
   end
 
   defp fresh(config, cache?) do
-    case Store.current_revision(config.repo) do
-      {:ok, revision} -> {:ok, Map.merge(blank_xid(revision), %{cache?: cache?})}
-      {:error, error} -> {:error, error}
+    with {:ok, revision} <- Store.current_revision(config.repo) do
+      {:ok, Map.merge(blank_xid(revision), %{cache?: cache?})}
     end
   end
 
@@ -101,44 +92,39 @@ defmodule Licet.Revision do
   defp recent_enough(config, xid) do
     quantized = current(config)
 
-    case Store.xid_visible?(config.repo, xid, quantized.snapshot) do
-      {:ok, true} -> {:ok, quantized}
-      {:ok, false} -> fresh_revision(config)
-      {:error, error} -> {:error, error}
+    with {:ok, visible} <- Store.xid_visible?(config.repo, xid, quantized.snapshot) do
+      if visible, do: {:ok, quantized}, else: fresh_revision(config)
     end
   end
 
   defp fresh_revision(config) do
-    case Store.current_revision(config.repo) do
-      {:ok, revision} -> {:ok, blank_xid(revision)}
-      {:error, error} -> {:error, error}
+    with {:ok, revision} <- Store.current_revision(config.repo) do
+      {:ok, blank_xid(revision)}
     end
   end
 
   defp committed(config, xid) do
-    case Store.xact_status(config.repo, xid) do
-      {:ok, "committed"} ->
-        :ok
-
-      {:ok, "in progress"} ->
-        same_transaction(config, xid)
-
-      {:ok, "aborted"} ->
-        {:error, Error.new(:token_not_committed, "token transaction aborted")}
-
-      {:ok, nil} ->
-        {:error, Error.new(:snapshot_expired, "token transaction is no longer available")}
-
-      {:error, error} ->
-        {:error, error}
+    with {:ok, status} <- Store.xact_status(config.repo, xid) do
+      status_result(config, xid, status)
     end
   end
 
+  defp status_result(_config, _xid, "committed"), do: :ok
+  defp status_result(config, xid, "in progress"), do: same_transaction(config, xid)
+
+  defp status_result(_config, _xid, "aborted"),
+    do: {:error, Error.new(:token_not_committed, "token transaction aborted")}
+
+  defp status_result(_config, _xid, nil),
+    do: {:error, Error.new(:snapshot_expired, "token transaction is no longer available")}
+
   defp same_transaction(config, xid) do
-    case Store.current_revision(config.repo) do
-      {:ok, %{own_xid: ^xid}} -> :ok
-      {:ok, _revision} -> {:error, Error.new(:token_not_committed, "token is not committed")}
-      {:error, error} -> {:error, error}
+    with {:ok, revision} <- Store.current_revision(config.repo) do
+      if revision.own_xid == xid do
+        :ok
+      else
+        {:error, Error.new(:token_not_committed, "token is not committed")}
+      end
     end
   end
 
@@ -179,23 +165,24 @@ defmodule Licet.Revision do
   # on the connection that actually runs the query. Autocommit checks do not.
   defp open_revision(config) do
     if in_transaction?(config.repo) or sandbox?(config.repo) do
-      case Store.current_revision(config.repo) do
-        {:ok, %{own_xid: ""}} -> :closed
-        {:ok, revision} -> {:ok, Map.put(revision, :cache?, false)}
-        {:error, error} -> {:error, error}
+      with {:ok, revision} <- Store.current_revision(config.repo) do
+        assigned_revision(revision)
       end
     else
       :closed
     end
   end
 
+  defp assigned_revision(%{own_xid: ""}), do: :closed
+  defp assigned_revision(revision), do: {:ok, Map.put(revision, :cache?, false)}
+
   defp sandbox?(repo) do
-    repo.config()[:pool] == Ecto.Adapters.SQL.Sandbox
+    repo.config()[:pool] == Sandbox
   end
 
   defp in_transaction?(repo) do
     repo
     |> Ecto.Adapter.lookup_meta()
-    |> Ecto.Adapters.SQL.in_transaction?()
+    |> SQL.in_transaction?()
   end
 end

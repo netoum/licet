@@ -1,6 +1,8 @@
 defmodule Licet.Sandbox do
   @moduledoc false
 
+  alias Ecto.Adapters.SQL.Sandbox, as: SQLSandbox
+
   @doc """
   Lets a child process use the caller's sandbox connection.
 
@@ -10,8 +12,8 @@ defmodule Licet.Sandbox do
   def allow(nil, _parent), do: :ok
 
   def allow(repo, parent) do
-    if repo.config()[:pool] == Ecto.Adapters.SQL.Sandbox do
-      _ = Ecto.Adapters.SQL.Sandbox.allow(repo, parent, self())
+    if repo.config()[:pool] == SQLSandbox do
+      _ = SQLSandbox.allow(repo, parent, self())
     end
 
     :ok

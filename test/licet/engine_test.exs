@@ -1,6 +1,8 @@
 defmodule Licet.EngineTest do
   use ExUnit.Case, async: true
 
+  alias Licet.Engine.Subjects
+
   @schema """
   definition user {}
   definition team {
@@ -76,7 +78,7 @@ defmodule Licet.EngineTest do
              explain(tuples, "document:1", "view", "user:ada")
 
     assert {:ok, set} = subjects(tuples, "document:2", "viewer")
-    assert {"user", "*", ""} in Licet.Engine.Subjects.to_list(set)
+    assert {"user", "*", ""} in Subjects.to_list(set)
 
     assert {:ok, ids} = resources(tuples, "document", "view", "user:ada")
     assert MapSet.member?(ids, "1")
@@ -101,7 +103,9 @@ defmodule Licet.EngineTest do
                revision(),
                resource("document:1"),
                "view",
-               subject("user:ada"), parallel: %{supervisor: Licet.EngineTest.Tasks, repo: nil})
+               subject("user:ada"),
+               parallel: %{supervisor: Licet.EngineTest.Tasks, repo: nil}
+             )
 
     assert {:error, %{reason: :timeout}} = Licet.Engine.collect([{:exit, :timeout}])
     assert {:ok, :allowed} = Licet.Engine.collect([{:ok, {:ok, :allowed}}])
@@ -109,6 +113,8 @@ defmodule Licet.EngineTest do
 
     assert {:error, %{reason: :cycle}} =
              Licet.Engine.collect([{:ok, {:error, Licet.Error.new(:cycle, "cycle")}}])
+
+    assert {:ok, :denied} = Licet.Engine.collect([{:ok, {:ok, :denied, []}}])
   end
 
   test "checks and explains without explicit options" do
@@ -163,7 +169,7 @@ defmodule Licet.EngineTest do
     assert MapSet.member?(via_team, "3")
 
     assert {:ok, set} = subjects(tuples, "document:1", "share")
-    assert {"user", "ada", ""} in Licet.Engine.Subjects.to_list(set)
+    assert {"user", "ada", ""} in Subjects.to_list(set)
     assert {:ok, _secret_subjects} = subjects(tuples, "document:2", "secret")
 
     assert {:error, %{reason: :unknown_relation}} =
@@ -196,10 +202,104 @@ defmodule Licet.EngineTest do
                "view"
              )
 
-    assert {"user", "cara", ""} in Licet.Engine.Subjects.to_list(walked)
+    assert {"user", "cara", ""} in Subjects.to_list(walked)
 
     assert {:error, %{reason: :lookup_too_large}} =
              resources(tuples, "document", "view", "user:ada", max_lookup: 1)
+  end
+
+  test "denies userset subjects and walks failed arrows" do
+    assert {:ok, :denied} =
+             check("document:1#owner@user:ada", "document:1", "owner", "team:eng#member")
+
+    assert {:error, %{reason: :depth_exceeded}} =
+             check(
+               "document:1#parent@document:2",
+               "document:1",
+               "view",
+               "user:bob",
+               max_depth: 0
+             )
+
+    assert {:ok, :denied} =
+             check(
+               "document:1#parent@document:2\ndocument:1#parent@document:3",
+               "document:1",
+               "view",
+               "user:ada"
+             )
+
+    assert {:ok, set} =
+             subjects(
+               "document:4#parent@document:1\ndocument:1#owner@user:ada",
+               "document:4",
+               "view"
+             )
+
+    assert {"user", "ada", ""} in Subjects.to_list(set)
+
+    assert {:error, %{reason: :depth_exceeded}} =
+             subjects("document:1#parent@document:2", "document:1", "view", max_depth: 0)
+
+    assert {:error, %{reason: :depth_exceeded}} =
+             subjects(
+               "document:3#viewer@team:eng#member",
+               "document:3",
+               "viewer",
+               max_depth: 0
+             )
+
+    assert {:error, %{reason: :depth_exceeded}} =
+             resources(
+               "document:3#viewer@team:eng#member",
+               "document",
+               "view",
+               "user:cara",
+               max_depth: 0
+             )
+
+    schema = %{
+      definitions: %{
+        "document" => %{
+          relations: %{"owner" => %{}},
+          permissions: %{
+            "view" => {:arrow, {:union, {:ref, "owner"}, {:ref, "owner"}}, {:ref, "owner"}}
+          }
+        }
+      }
+    }
+
+    assert {:ok, :denied} =
+             Licet.Engine.check(
+               schema,
+               reader([]),
+               revision(),
+               resource("document:1"),
+               "view",
+               subject("user:ada")
+             )
+
+    failing_left = %{
+      definitions: %{
+        "document" => %{
+          relations: %{"parent" => %{}, "owner" => %{}},
+          permissions: %{
+            "view" => {:union, {:arrow, "parent", {:ref, "view"}}, {:ref, "owner"}}
+          }
+        }
+      }
+    }
+
+    assert {:error, %{reason: :depth_exceeded}} =
+             Licet.Engine.check(
+               failing_left,
+               reader(["document:1#parent@document:2"]),
+               revision(),
+               resource("document:1"),
+               "view",
+               subject("user:ada"),
+               max_depth: 0
+             )
   end
 
   test "rejects lookups that exceed the cap" do

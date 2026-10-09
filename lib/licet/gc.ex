@@ -51,20 +51,17 @@ defmodule Licet.GC do
     key = :erlang.phash2({:licet_gc, config.prefix})
 
     config.repo.checkout(fn ->
-      case Store.try_lock(config.repo, key) do
-        {:ok, true} ->
-          try do
-            Store.collect(config.repo, config.prefix, config.gc_window, config.gc_batch)
-          after
-            Store.unlock(config.repo, key)
-          end
-
-        {:ok, false} ->
-          :locked
-
-        {:error, error} ->
-          {:error, error}
+      with {:ok, locked} <- Store.try_lock(config.repo, key) do
+        collect_locked(config, key, locked)
       end
     end)
   end
+
+  defp collect_locked(config, key, true) do
+    Store.collect(config.repo, config.prefix, config.gc_window, config.gc_batch)
+  after
+    Store.unlock(config.repo, key)
+  end
+
+  defp collect_locked(_config, _key, false), do: :locked
 end

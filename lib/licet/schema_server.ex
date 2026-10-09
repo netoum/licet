@@ -98,38 +98,27 @@ defmodule Licet.SchemaServer do
   defp parse_old(nil), do: {:ok, nil}
   defp parse_old(""), do: {:ok, nil}
 
-  defp parse_old(source) do
-    case Schema.parse(source) do
-      {:ok, schema} -> {:ok, schema}
-      {:error, error} -> {:error, error}
+  defp parse_old(source), do: Schema.parse(source)
+
+  defp write_if_needed(config, old, parsed, source) do
+    config.repo.transaction(fn -> commit_schema(config, old, parsed, source) end)
+    |> unwrap()
+  end
+
+  defp commit_schema(config, old, parsed, source) do
+    case Store.ensure_compatible(config.repo, config.prefix, old, parsed) do
+      :ok -> finish_schema(config, source, parsed.hash)
+      {:error, error} -> config.repo.rollback(error)
     end
   end
 
-  defp write_if_needed(config, old, parsed, source) do
-    if old && old.hash == parsed.hash do
-      :ok
-    else
-      config.repo.transaction(fn ->
-        case Store.ensure_compatible(config.repo, config.prefix, old, parsed) do
-          :ok ->
-            case Store.write_schema(config.repo, config.prefix, source, parsed.hash, %{}) do
-              {:ok, _token} -> :ok
-              {:error, error} -> config.repo.rollback(error)
-            end
-
-          {:error, error} ->
-            config.repo.rollback(error)
-        end
-      end)
-      |> unwrap()
-    end
+  defp finish_schema(config, source, hash) do
+    {:ok, _token} = Store.write_schema(config.repo, config.prefix, source, hash, %{})
+    :ok
   end
 
   defp unwrap({:ok, :ok}), do: :ok
   defp unwrap({:error, %Error{} = error}), do: {:error, error}
-
-  defp unwrap(other),
-    do: {:error, Error.new(:invalid_schema, "could not store schema: #{inspect(other)}")}
 
   defp empty do
     %{definitions: %{}, expiration: false, source: "", hash: hash("")}

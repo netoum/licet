@@ -2,6 +2,8 @@ defmodule Licet.DataCase do
   @moduledoc false
   use ExUnit.CaseTemplate
 
+  alias Ecto.Adapters.SQL.Sandbox
+
   using do
     quote do
       import Licet.DataCase
@@ -9,8 +11,8 @@ defmodule Licet.DataCase do
   end
 
   setup do
-    owner = Ecto.Adapters.SQL.Sandbox.start_owner!(Licet.TestRepo, shared: true)
-    on_exit(fn -> Ecto.Adapters.SQL.Sandbox.stop_owner(owner) end)
+    owner = Sandbox.start_owner!(Licet.TestRepo, shared: true)
+    on_exit(fn -> Sandbox.stop_owner(owner) end)
     :ok
   end
 

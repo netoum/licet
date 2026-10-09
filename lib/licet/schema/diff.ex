@@ -65,11 +65,14 @@ defmodule Licet.Schema.Diff do
 
   defp narrowed_relations(type, definition, newer) do
     Enum.flat_map(definition.relations, fn {name, relation} ->
-      case Map.get(newer.relations, name) do
-        nil -> []
-        next -> if subjects_narrowed?(relation, next), do: [{type, name}], else: []
-      end
+      narrowed_name(type, name, relation, Map.get(newer.relations, name))
     end)
+  end
+
+  defp narrowed_name(_type, _name, _relation, nil), do: []
+
+  defp narrowed_name(type, name, relation, next) do
+    if subjects_narrowed?(relation, next), do: [{type, name}], else: []
   end
 
   defp subjects_narrowed?(relation, next) do

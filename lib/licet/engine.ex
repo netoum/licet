@@ -418,7 +418,6 @@ defmodule Licet.Engine do
   end
 
   defp capped(ctx, %Subjects{} = set), do: capped(ctx, {:ok, set})
-  defp capped(_ctx, {:error, error}), do: {:error, error}
 
   @doc false
   @spec resource_ids(map(), term(), map(), String.t(), String.t(), map(), keyword()) ::
@@ -483,7 +482,6 @@ defmodule Licet.Engine do
 
   defp remaining_expr(left, right) when is_binary(left), do: right
   defp remaining_expr({:arrow, _left, inner}, right), do: {:arrow, relation_name(inner), right}
-  defp remaining_expr({:ref, _name}, right), do: right
 
   defp consider_arrow(ctx, acc, tuple, expr, subject) do
     if arrow_target(tuple) == [] do
@@ -515,20 +513,21 @@ defmodule Licet.Engine do
 
   defp resource_match(_ctx, tuple, subject) do
     cond do
-      tuple.subject_relation == "" and tuple.subject_type == subject.type and
-          tuple.subject_id == subject.id ->
-        {:ok, true}
-
-      tuple.subject_relation == "" and tuple.subject_id == "*" and
-        tuple.subject_type == subject.type and subject.relation == "" ->
-        {:ok, true}
-
-      tuple.subject_relation != "" ->
-        {:error, :walk}
-
-      true ->
-        {:ok, false}
+      concrete_subject?(tuple, subject) -> {:ok, true}
+      wildcard_subject?(tuple, subject) -> {:ok, true}
+      tuple.subject_relation != "" -> {:error, :walk}
+      true -> {:ok, false}
     end
+  end
+
+  defp concrete_subject?(tuple, subject) do
+    tuple.subject_relation == "" and tuple.subject_type == subject.type and
+      tuple.subject_id == subject.id
+  end
+
+  defp wildcard_subject?(tuple, subject) do
+    tuple.subject_relation == "" and tuple.subject_id == "*" and
+      tuple.subject_type == subject.type and subject.relation == ""
   end
 
   defp consider_resource(ctx, acc, tuple, subject) do
@@ -536,7 +535,6 @@ defmodule Licet.Engine do
       {:ok, true} -> keep(capped_ids(ctx, MapSet.put(acc, tuple.resource_id)))
       {:ok, false} -> {:cont, {:ok, acc}}
       {:error, :walk} -> walk_resource(ctx, acc, tuple, subject)
-      {:error, error} -> {:halt, {:error, error}}
     end
   end
 
@@ -552,16 +550,12 @@ defmodule Licet.Engine do
   defp relation_name({:ref, name}), do: name
   defp relation_name({:arrow, left, _right}), do: relation_name(left)
 
-  defp capped_ids(ctx, {:ok, ids}), do: capped_ids(ctx, ids)
-
   defp capped_ids(ctx, %MapSet{} = ids) do
     case lookup_guard(MapSet.size(ids), ctx.max_lookup) do
       :ok -> {:ok, ids}
       {:error, error} -> {:error, error}
     end
   end
-
-  defp capped_ids(_ctx, {:error, error}), do: {:error, error}
 
   defp keep({:ok, value}), do: {:cont, {:ok, value}}
   defp keep({:error, error}), do: {:halt, {:error, error}}
