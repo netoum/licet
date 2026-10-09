@@ -1,0 +1,7 @@
+definition user {}
+
+definition post {
+  relation owner: user
+  relation viewer: user
+  permission view = owner + viewer
+}
