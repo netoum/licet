@@ -80,7 +80,7 @@ mix credo --strict
 mix docs --warnings-as-errors
 ```
 
-Tests expect Postgres on `127.0.0.1:54329` by default (`PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`).
+Tests expect Postgres on `127.0.0.1:54329` by default (`PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`). They log at `:warning`; set `config :logger, level: :debug` in `config/test.exs` to see every query.
 
 `examples/playground` is a local playground for SpiceDB validation files, checked by Licet as you type (`mix setup && mix phx.server`).
 

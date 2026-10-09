@@ -114,10 +114,12 @@ defmodule Licet.GapsTest do
     path = "tmp/001_install_licet.exs"
     File.rm(path)
     Mix.Task.rerun("licet.gen.migration", ["--path", path])
+    assert_received {:mix_shell, :info, ["created " <> ^path]}
     assert File.read!(path) =~ "Licet.Migration.up"
     File.rm(path)
     Mix.Task.rerun("licet.gen.migration", [])
     [generated | _] = Path.wildcard("priv/repo/migrations/*_install_licet.exs")
+    assert_received {:mix_shell, :info, ["created " <> ^generated]}
     File.rm(generated)
 
     pg = %Postgrex.Error{postgres: %{code: :unique_violation}}

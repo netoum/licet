@@ -186,6 +186,8 @@ defmodule LicetTest do
       assert :ok = Licet.GC.collect(name)
       send(Licet.GC.name(name), :gc)
       send(Licet.Revision.name(name), :refresh)
+      :sys.get_state(Licet.GC.name(name))
+      :sys.get_state(Licet.Revision.name(name))
     end)
   end
 
@@ -237,6 +239,7 @@ defmodule LicetTest do
 
     assert {:ok, _} = Licet.write(name, [])
     send(Licet.GC.name(name), :gc)
+    :sys.get_state(Licet.GC.name(name))
     assert :ok = Licet.Sandbox.allow(Licet.TestRepo, self())
     assert :ok = Licet.Testing.allow(Licet.TestRepo, self(), self())
     File.rm(path)

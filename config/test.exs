@@ -14,3 +14,5 @@ config :licet, Licet.TestRepo,
   database: System.get_env("PGDATABASE", "licet_test"),
   pool: Ecto.Adapters.SQL.Sandbox,
   pool_size: 10
+
+config :logger, level: :warning
