@@ -11,12 +11,14 @@ defmodule Licet.Error do
 
   @type reason ::
           :already_exists
+          | :cancelled
           | :cycle
           | :depth_exceeded
           | :invalid_config
           | :invalid_filter
           | :invalid_relationship
           | :invalid_schema
+          | :invalid_validation_file
           | :lookup_too_large
           | :not_migrated
           | :not_started

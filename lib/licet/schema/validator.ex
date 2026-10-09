@@ -288,7 +288,19 @@ defmodule Licet.Schema.Validator do
   end
 
   defp expr_errors(
-         {:arrow, left, right},
+         {:nil_expr, _offset},
+         _relations,
+         _permissions,
+         _definition,
+         _definitions,
+         _source,
+         _stack,
+         _hop
+       ),
+       do: []
+
+  defp expr_errors(
+         {kind, left, right},
          relations,
          permissions,
          definition,
@@ -296,31 +308,57 @@ defmodule Licet.Schema.Validator do
          source,
          stack,
          _hop
-       ) do
+       )
+       when kind in [:arrow, :arrow_all] do
     arrow_errors(left, right, relations, permissions, definition, definitions, source, stack)
   end
 
   defp arrow_errors(left, right, relations, permissions, definition, definitions, source, stack) do
-    case subject_definitions(left, relations, permissions, definition, definitions, source, stack) do
-      {:ok, targets} ->
-        Enum.flat_map(targets, fn target ->
-          {target_relations, target_permissions} = split_compiled_pending(target)
+    with {:ok, targets} <-
+           subject_definitions(
+             left,
+             relations,
+             permissions,
+             definition,
+             definitions,
+             source,
+             stack
+           ),
+         {:ok, reachable} <- reachable_targets(targets, right, source) do
+      Enum.flat_map(reachable, fn target ->
+        {target_relations, target_permissions} = split_compiled_pending(target)
 
-          expr_errors(
-            right,
-            target_relations,
-            target_permissions,
-            target,
-            definitions,
-            source,
-            stack,
-            true
-          )
-        end)
-
-      {:error, errors} ->
-        errors
+        expr_errors(
+          right,
+          target_relations,
+          target_permissions,
+          target,
+          definitions,
+          source,
+          stack,
+          true
+        )
+      end)
+    else
+      {:error, errors} -> errors
     end
+  end
+
+  defp reachable_targets(targets, {:name, name, offset}, source) do
+    case Enum.filter(targets, &target_defines?(&1, name)) do
+      [] ->
+        {:error, [err(source, offset, "#{name} is not defined on any subject type of the arrow")]}
+
+      reachable ->
+        {:ok, reachable}
+    end
+  end
+
+  defp reachable_targets(targets, _right, _source), do: {:ok, targets}
+
+  defp target_defines?(target, name) do
+    {target_relations, target_permissions} = split_compiled_pending(target)
+    Map.has_key?(target_relations, name) or Map.has_key?(target_permissions, name)
   end
 
   defp subject_definitions(

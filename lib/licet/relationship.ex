@@ -5,6 +5,7 @@ defmodule Licet.Relationship do
   Text form follows SpiceDB: `document:roadmap#owner@user:anne`,
   `document:roadmap#viewer@team:eng#member`, and
   `document:roadmap#viewer@user:anne[expiration:2026-01-01T00:00:00Z]`.
+  A subject written `user:anne#...` is the same as `user:anne`.
   Names stay strings. Licet never turns them into atoms.
   """
 
@@ -91,6 +92,7 @@ defmodule Licet.Relationship do
           {:ok, String.t(), String.t(), String.t()} | {:error, Licet.Error.t()}
   def parse_object(value) when is_binary(value) do
     case String.split(value, "#", parts: 2) do
+      [ref, "..."] -> object_without_relation(ref)
       [ref, relation] -> object_with_relation(ref, relation)
       [ref] -> object_without_relation(ref)
     end
@@ -152,6 +154,9 @@ defmodule Licet.Relationship do
 
   defp split_subject(value) do
     case String.split(value, "#", parts: 2) do
+      [ref, "..."] ->
+        split_subject(ref)
+
       [ref, relation] ->
         case split_ref(ref) do
           {:ok, type, id} -> {:ok, type, id, relation}

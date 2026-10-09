@@ -58,7 +58,20 @@ defmodule Licet.SchemaTest do
 
     assert message =~ "use expiration"
     assert {:error, _} = Licet.Schema.parse(:nope)
-    assert {:error, %{message: "expected end of string"}} = Licet.Schema.parse("!")
+    assert {:error, %{message: "unexpected character !"}} = Licet.Schema.parse("!")
+
+    assert {:error, %{reason: :invalid_schema, details: %{line: 1}}} =
+             Licet.Schema.parse(String.duplicate("definition a {} ", 5_001))
+
+    expiration =
+      "use expiration\ndefinition user {}\ndefinition document {\n  relation viewer: user with "
+
+    assert {:error, %{message: "caveats are not supported"}} =
+             Licet.Schema.parse(expiration <> "expiration and testcaveat\n}")
+
+    assert {:error, %{message: "expected expiration"}} =
+             Licet.Schema.parse(expiration <> "| user\n}")
+
     assert {:error, _} = Licet.Schema.parse("definition user { relation")
     assert {:error, _} = Licet.Schema.parse("definition user { permission view =")
     assert {:error, _} = Licet.Schema.parse("definition")

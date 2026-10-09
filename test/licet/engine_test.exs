@@ -78,7 +78,7 @@ defmodule Licet.EngineTest do
              explain(tuples, "document:1", "view", "user:ada")
 
     assert {:ok, set} = subjects(tuples, "document:2", "viewer")
-    assert {"user", "*", ""} in Subjects.to_list(set)
+    assert {"user", "*", ""} in found(set)
 
     assert {:ok, ids} = resources(tuples, "document", "view", "user:ada")
     assert MapSet.member?(ids, "1")
@@ -115,6 +115,56 @@ defmodule Licet.EngineTest do
              Licet.Engine.collect([{:ok, {:error, Licet.Error.new(:cycle, "cycle")}}])
 
     assert {:ok, :denied} = Licet.Engine.collect([{:ok, {:ok, :denied, []}}])
+  end
+
+  test "a settled parallel check cancels its siblings at their next step" do
+    {:ok, schema} = Licet.Schema.parse(@schema)
+
+    memory =
+      reader([
+        "document:1#parent@document:2",
+        "document:1#parent@document:3",
+        "document:2#owner@user:ada",
+        "document:3#parent@document:4"
+      ])
+
+    reader = %Licet.SlowReader{memory: memory, test: self(), slow: "3"}
+    start_supervised!({Task.Supervisor, name: Licet.EngineTest.CancelTasks})
+
+    assert {:ok, :allowed} =
+             Licet.Engine.check(
+               schema,
+               reader,
+               revision(),
+               resource("document:1"),
+               "view",
+               subject("user:ada"),
+               parallel: %{supervisor: Licet.EngineTest.CancelTasks, repo: nil}
+             )
+
+    refute_received {:listed, "4"}
+
+    cancel = :atomics.new(1, [])
+    error = Licet.Error.new(:cycle, "cycle")
+
+    assert {:ok, :allowed} =
+             Licet.Engine.collect([{:ok, {:ok, :allowed}}, {:ok, {:error, error}}], cancel)
+
+    assert :atomics.get(cancel, 1) == 1
+  end
+
+  test "an arrow to a type the schema does not define reports the type" do
+    {:ok, schema} = Licet.Schema.parse(@schema)
+
+    assert {:error, %{reason: :unknown_type}} =
+             Licet.Engine.check(
+               schema,
+               reader("document:1#parent@ghost:1"),
+               revision(),
+               resource("document:1"),
+               "view",
+               subject("user:ada")
+             )
   end
 
   test "checks and explains without explicit options" do
@@ -169,7 +219,7 @@ defmodule Licet.EngineTest do
     assert MapSet.member?(via_team, "3")
 
     assert {:ok, set} = subjects(tuples, "document:1", "share")
-    assert {"user", "ada", ""} in Subjects.to_list(set)
+    assert {"user", "ada", ""} in found(set)
     assert {:ok, _secret_subjects} = subjects(tuples, "document:2", "secret")
 
     assert {:error, %{reason: :unknown_relation}} =
@@ -202,7 +252,7 @@ defmodule Licet.EngineTest do
                "view"
              )
 
-    assert {"user", "cara", ""} in Subjects.to_list(walked)
+    assert {"user", "cara", ""} in found(walked)
 
     assert {:error, %{reason: :lookup_too_large}} =
              resources(tuples, "document", "view", "user:ada", max_lookup: 1)
@@ -236,7 +286,7 @@ defmodule Licet.EngineTest do
                "view"
              )
 
-    assert {"user", "ada", ""} in Subjects.to_list(set)
+    assert {"user", "ada", ""} in found(set)
 
     assert {:error, %{reason: :depth_exceeded}} =
              subjects("document:1#parent@document:2", "document:1", "view", max_depth: 0)
@@ -302,6 +352,32 @@ defmodule Licet.EngineTest do
              )
   end
 
+  test "looks up subjects of one type, with usersets and wildcard exclusions" do
+    tuples = [
+      "document:1#viewer@user:*",
+      "document:1#viewer@user:tom",
+      "document:1#viewer@team:eng#member",
+      "team:eng#member@user:cara"
+    ]
+
+    assert {:ok, users} = subjects(tuples, "document:1", "viewer")
+
+    assert Subjects.to_list(users) == [
+             %{subject: {"user", "*", ""}, excluded: []},
+             %{subject: {"user", "cara", ""}, excluded: []},
+             %{subject: {"user", "tom", ""}, excluded: []}
+           ]
+
+    assert {:ok, teams} = subjects(tuples, "document:1", "viewer", of: {"team", "member"})
+    assert found(teams) == [{"team", "eng", "member"}]
+
+    assert {:ok, itself} = subjects(tuples, "team:eng", "member", of: {"team", "member"})
+    assert found(itself) == [{"team", "eng", "member"}]
+
+    assert {:ok, none} = subjects(tuples, "document:1", "viewer", of: {"team", ""})
+    assert found(none) == []
+  end
+
   test "rejects lookups that exceed the cap" do
     tuples = for n <- 1..3, do: "document:1#viewer@user:u#{n}"
 
@@ -334,8 +410,21 @@ defmodule Licet.EngineTest do
   defp subjects(tuples, resource, permission, opts \\ []) do
     {:ok, schema} = Licet.Schema.parse(@schema)
     %{type: type, id: id} = resource(resource)
-    Licet.Engine.subject_set(schema, reader(tuples), revision(), type, id, permission, opts)
+    {subject_type, opts} = Keyword.pop(opts, :of, {"user", ""})
+
+    Licet.Engine.subject_set(
+      schema,
+      reader(tuples),
+      revision(),
+      type,
+      id,
+      permission,
+      subject_type,
+      opts
+    )
   end
+
+  defp found(set), do: Enum.map(Subjects.to_list(set), & &1.subject)
 
   defp resources(tuples, type, permission, subject, opts \\ []) do
     {:ok, schema} = Licet.Schema.parse(@schema)

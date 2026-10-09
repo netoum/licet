@@ -1,6 +1,8 @@
 defmodule Licet.Differential do
   @moduledoc false
 
+  alias Licet.SpiceDB
+
   def maybe do
     if System.get_env("LICET_SPICEDB") == "1" do
       compare()
@@ -12,11 +14,11 @@ defmodule Licet.Differential do
   defp compare do
     Application.ensure_all_started(:req)
     count = System.get_env("LICET_DIFFERENTIAL_CASES", "100") |> String.to_integer()
-    url = System.get_env("LICET_SPICEDB_URL", "http://127.0.0.1:8443")
+    url = SpiceDB.url()
     schema = schema()
 
     with {:ok, compiled} <- Licet.Schema.parse(schema),
-         :ok <- spice_schema(url, schema) do
+         :ok <- SpiceDB.load(url, schema, []) do
       run_cases(url, compiled, count)
     end
   end
@@ -34,7 +36,7 @@ defmodule Licet.Differential do
     {relationships, assertion} = case_for(index)
 
     with {:ok, tuples} <- tuples(relationships),
-         :ok <- spice_write(url, relationships),
+         :ok <- SpiceDB.write(url, tuples),
          {:ok, spice} <- spice_check(url, assertion),
          {:ok, licet} <- licet_check(compiled, tuples, assertion) do
       if spice == licet do
@@ -98,62 +100,16 @@ defmodule Licet.Differential do
     end
   end
 
-  defp spice_schema(url, schema) do
-    post(url, "/v1/schema/write", %{"schema" => schema})
-  end
-
-  defp spice_write(url, relationships) do
-    updates =
-      Enum.map(relationships, fn line ->
-        {:ok, rel} = Licet.Relationship.parse(line)
-
-        %{
-          "operation" => "OPERATION_TOUCH",
-          "relationship" => %{
-            "resource" => %{"objectType" => rel.resource_type, "objectId" => rel.resource_id},
-            "relation" => rel.relation,
-            "subject" => %{
-              "object" => %{"objectType" => rel.subject_type, "objectId" => rel.subject_id}
-            }
-          }
-        }
-      end)
-
-    post(url, "/v1/relationships/write", %{"updates" => updates})
-  end
-
   defp spice_check(url, assertion) do
     {:ok, rel} = Licet.Relationship.parse(assertion)
 
-    body = %{
-      "consistency" => %{"fullyConsistent" => true},
-      "resource" => %{"objectType" => rel.resource_type, "objectId" => rel.resource_id},
-      "permission" => rel.relation,
-      "subject" => %{
-        "object" => %{"objectType" => rel.subject_type, "objectId" => rel.subject_id}
-      }
-    }
+    request =
+      {{rel.resource_type, rel.resource_id}, rel.relation,
+       {rel.subject_type, rel.subject_id, rel.subject_relation}}
 
-    case Req.post(url <> "/v1/permissions/check", json: body, headers: headers()) do
-      {:ok, %{status: 200, body: %{"permissionship" => "PERMISSIONSHIP_HAS_PERMISSION"}}} ->
-        {:ok, true}
-
-      {:ok, %{status: 200, body: %{"permissionship" => "PERMISSIONSHIP_NO_PERMISSION"}}} ->
-        {:ok, false}
-
-      other ->
-        {:error, other}
+    case SpiceDB.check_bulk(url, [request]) do
+      {:ok, [answer]} -> answer
+      error -> error
     end
-  end
-
-  defp post(url, path, body) do
-    case Req.post(url <> path, json: body, headers: headers()) do
-      {:ok, %{status: status}} when status in 200..299 -> :ok
-      other -> {:error, other}
-    end
-  end
-
-  defp headers do
-    [{"authorization", "Bearer test"}]
   end
 end

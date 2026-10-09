@@ -146,15 +146,25 @@ defmodule Licet do
   end
 
   @doc """
-  Lists subjects that have `permission` on `resource`.
+  Lists subjects of `subject_type` that have `permission` on `resource`, like
+  SpiceDB's LookupSubjects.
+
+  `subject_type` is a type such as `"user"`, or a userset type such as
+  `"team#member"`. Each result has a `subject` and the ids it `excluded`. Only
+  a wildcard excludes anything: `%{subject: "user:*", excluded: ["user:dan"]}`
+  means every user but Dan. Concrete subjects are listed next to a wildcard
+  that also covers them.
+
+      {:ok, subjects, cursor} = Licet.lookup_subjects(MyApp.Licet, "document:1", "view", "user")
   """
-  @spec lookup_subjects(atom(), String.t(), String.t(), keyword()) ::
-          {:ok, [String.t()], String.t() | nil} | {:error, Error.t()}
-  def lookup_subjects(name, resource, permission, opts \\ []) do
-    meta = %{resource: resource, permission: permission}
+  @spec lookup_subjects(atom(), String.t(), String.t(), String.t(), keyword()) ::
+          {:ok, [%{subject: String.t(), excluded: [String.t()]}], String.t() | nil}
+          | {:error, Error.t()}
+  def lookup_subjects(name, resource, permission, subject_type, opts \\ []) do
+    meta = %{resource: resource, permission: permission, subject_type: subject_type}
 
     :telemetry.span([:licet, :lookup], meta, fn ->
-      {do_lookup_subjects(name, resource, permission, opts), meta}
+      {do_lookup_subjects(name, resource, permission, subject_type, opts), meta}
     end)
   end
 
@@ -260,9 +270,10 @@ defmodule Licet do
     end
   end
 
-  defp do_lookup_subjects(name, resource, permission, opts) do
+  defp do_lookup_subjects(name, resource, permission, subject_type, opts) do
     with {:ok, prepared} <- prepare(name, opts),
          {:ok, resource} <- object(resource, false),
+         {:ok, subject_type} <- subject_type(subject_type),
          {:ok, set} <-
            Engine.subject_set(
              prepared.schema,
@@ -271,11 +282,41 @@ defmodule Licet do
              resource.type,
              resource.id,
              permission,
+             subject_type,
              prepared.opts
            ) do
-      rendered = Enum.map(Subjects.to_list(set), &format_subject/1)
-      Licet.Page.slice(rendered, Keyword.get(opts, :cursor), Keyword.get(opts, :limit, 100))
+      found = Map.new(Subjects.to_list(set), &format_found/1)
+
+      with {:ok, page, cursor} <-
+             Licet.Page.slice(
+               Map.keys(found),
+               Keyword.get(opts, :cursor),
+               Keyword.get(opts, :limit, 100)
+             ) do
+        {:ok, Enum.map(page, &%{subject: &1, excluded: Map.fetch!(found, &1)}), cursor}
+      end
     end
+  end
+
+  defp subject_type(value) when is_binary(value) do
+    {type, relation} =
+      case String.split(value, "#", parts: 2) do
+        [type, relation] -> {type, relation}
+        [type] -> {type, ""}
+      end
+
+    if Relationship.valid_type?(type) and
+         (relation == "" or Relationship.valid_relation?(relation)),
+       do: {:ok, {type, relation}},
+       else: {:error, Error.new(:invalid_filter, "invalid subject type #{inspect(value)}")}
+  end
+
+  defp subject_type(other),
+    do: {:error, Error.new(:invalid_filter, "invalid subject type #{inspect(other)}")}
+
+  defp format_found(%{subject: {type, id, relation}, excluded: excluded}) do
+    {format_subject({type, id, relation}),
+     Enum.map(excluded, &format_subject({type, &1, relation}))}
   end
 
   defp prepare(name, opts) do
@@ -316,7 +357,8 @@ defmodule Licet do
   end
 
   defp run_check(prepared, resource, permission, subject) do
-    key = {prepared.revision.snapshot, resource, permission, subject}
+    %{snapshot: snapshot, own_xid: own_xid, at: at} = prepared.revision
+    key = {{snapshot, own_xid, at}, resource, permission, subject}
 
     Dispatch.compute(prepared.config.name, key, prepared.config.timeout, fn ->
       Engine.check(
@@ -351,7 +393,8 @@ defmodule Licet do
     end
   end
 
-  defp format_subject({type, id, _relation}), do: type <> ":" <> id
+  defp format_subject({type, id, ""}), do: type <> ":" <> id
+  defp format_subject({type, id, relation}), do: type <> ":" <> id <> "#" <> relation
 
   defp normalize_updates(updates) do
     Enum.reduce_while(updates, {:ok, []}, fn update, {:ok, acc} ->

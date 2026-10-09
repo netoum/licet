@@ -52,7 +52,7 @@ definition document {
 
 ## What v1 includes
 
-- Definitions, relations, permissions, `+`, `&`, `-`, `->`, wildcards, and `team#member`
+- Definitions, relations, permissions, `+`, `&`, `-`, `->`, `.any()`, `.all()`, `nil`, wildcards, and `team#member`
 - `use expiration` and `with expiration`
 - `check`, `check_bulk`, `lookup_resources`, `lookup_subjects`, and `explain`
 - Zed tokens and four consistency modes: `:minimize_latency`, `{:at_least, token}`, `{:exact, token}`, `:full`
@@ -61,7 +61,7 @@ definition document {
 - Garbage collection behind a Postgres advisory lock
 - `Licet.Multi`, `Licet.Testing`, and `mix licet.validate`
 
-Caveats, `.all()`, `self`, Watch, and a networked service are intentionally out of v1. See the [upgrade guide](guides/upgrade.md).
+Caveats, `self`, Watch, and a networked service are intentionally out of v1. See the [upgrade guide](guides/upgrade.md).
 
 ## Documentation
 
@@ -81,6 +81,8 @@ mix docs --warnings-as-errors
 ```
 
 Tests expect Postgres on `127.0.0.1:54329` by default (`PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`).
+
+`examples/playground` is a local playground for SpiceDB validation files, checked by Licet as you type (`mix setup && mix phx.server`).
 
 ## License
 

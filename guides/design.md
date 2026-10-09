@@ -38,13 +38,27 @@ Inside an open transaction, including a shared Ecto sandbox transaction that alr
 
 ## Cache
 
-The cache is a public ETS table whose name is distinct from the `Cache` process (`Instance.CacheTable` versus `Instance.Cache`). Keys include the snapshot, so two revisions never share an entry. Errors, in-transaction checks, and `:full` are not stored. Concurrent misses for one key register in a `Registry` and the waiters reuse the first result.
+The cache is a public ETS table whose name is distinct from the `Cache` process (`Instance.CacheTable` versus `Instance.Cache`). Keys include the whole revision: the snapshot, the own xid, and the time used for expiration. The snapshot alone is not enough. A transaction's recorded snapshot does not list its own xid, so it can have the same text as an autocommit snapshot taken just before it. The token for that transaction must still see its own writes. Errors, in-transaction checks, and `:full` are not stored. Concurrent misses for one key register in a `Registry` and the waiters reuse the first result.
 
 ## Evaluation
 
-The schema compiler turns permissions into unions, intersections, exclusions, and arrows. Arrows walk a relation, skip wildcards and userset tuples, then check the right-hand permission on each subject. Depth counts those hops. The default limit is 50. A timeout is a monotonic deadline checked before each expansion.
+The schema compiler turns permissions into unions, intersections, exclusions, `nil`, and arrows. The semantics follow SpiceDB's dispatcher:
 
-Direct cycles such as `view = view` are rejected at schema compile time. Arrow recursion such as `view = parent->view` is allowed: a name already on the stack is a successful hop, not another expansion. The stack is per path, so a diamond is not a cycle.
+- An arrow (`->` or `.any()`) walks the tupleset relation and checks the right-hand name on each subject object. Wildcard rows are skipped. A row's subject relation is ignored, so `document:1#parent@folder:1#viewer` leads to `folder:1`, as in SpiceDB's `checkdispatchset`.
+- `.all()` requires every subject object to grant. With no subject objects it grants nothing.
+- A subject type that does not define the right-hand name contributes nothing. The schema is rejected only when no subject type of the tupleset defines it.
+- A userset subject is a member of itself: `document:1#viewer` has `viewer` on `document:1` at every step, in checks and in lookups.
+- A check walks userset rows even when the subject is itself a userset, so `group:a#member` can reach `group:b#member` through `group:b#member@group:a#member`.
+
+Depth counts hops. The default limit is 50. A timeout is a monotonic deadline checked before each step.
+
+Direct cycles such as `view = view` are rejected at schema compile time. Recursion through data, such as `view = parent->view`, is allowed. Reaching the same object and name twice on one path returns a `:cycle` error. The stack is per path, so a diamond is not a cycle.
+
+With a running instance, the branches of an arrow or a userset walk run in parallel under the instance's `Task.Supervisor`. The first `:allowed` or error settles the answer and raises a shared cancel flag. Siblings check the flag before their next step and stop, the same way SpiceDB cancels a branch through its context. A sibling is killed only when the deadline passes. Killing it while it holds a checked-out connection would make Postgrex drop that connection.
+
+## Why Postgres only
+
+SpiceDB supports several datastores because it is a standalone service. Licet is a library inside an Elixir application that already runs Postgres through Ecto. Postgres gives Licet everything SpiceDB's Postgres datastore uses: `xid8` transaction ids, `pg_snapshot` visibility, and transactional writes on the application's own connection. That last part lets a permission write join the application's `Ecto.Multi` and be read back before commit, which a separate datastore cannot offer. One datastore also means one visibility rule to test, and the conformance corpus runs against it directly. The `xid8` and `pg_snapshot` functions exist since Postgres 13. Licet supports Postgres 15 and newer, the versions CI runs.
 
 ## Sandbox
 

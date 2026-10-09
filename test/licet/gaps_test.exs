@@ -79,7 +79,7 @@ defmodule Licet.GapsTest do
            ) == "timed out"
 
     assert_raise Licet.Error, fn -> Licet.Migration.statements("Bad") end
-    assert {:error, %{reason: :invalid_schema}} = Licet.Validate.run_file("missing.yaml")
+    assert {:error, %{reason: :invalid_validation_file}} = Licet.Validate.run_file("missing.yaml")
 
     assert {:error, %{reason: :invalid_relationship}} =
              Licet.Validate.run("schema: |\n  definition user {}\nrelationships: |\n  nope\n")
@@ -99,6 +99,16 @@ defmodule Licet.GapsTest do
     )
 
     assert_raise Mix.Error, fn -> Mix.Tasks.Licet.Validate.run([denied]) end
+
+    File.write!(
+      denied,
+      "schema: |\n  definition user {}\n  definition document {\n    relation viewer: user\n  }\nvalidation:\n  document:1#viewer:\n    - '[user:ada] is <document:1#viewer>'\n"
+    )
+
+    assert_raise Mix.Error, ~r/missing expected subject `user:ada`/, fn ->
+      Mix.Tasks.Licet.Validate.run([denied])
+    end
+
     File.rm(denied)
 
     path = "tmp/001_install_licet.exs"
@@ -239,7 +249,7 @@ defmodule Licet.GapsTest do
         end)
       end)
 
-    assert_receive :dying
+    assert_receive :dying, 1_000
 
     waiter =
       Task.async(fn ->

@@ -3,9 +3,11 @@ defmodule Licet.Schema do
   Parses and compiles a `.zed` schema.
 
   The supported subset is definitions, relations, permissions, the operators
-  `+`, `&`, `-` and `->`, wildcards, subject relations such as `team#member`,
-  `use expiration`, and `with expiration`. Comments starting with `//` are
-  ignored. Caveats, `self`, and `.all` are rejected.
+  `+`, `&`, `-` and `->`, the arrow functions `.any()` and `.all()`, `nil`,
+  wildcards, subject relations such as `team#member`, `use expiration`, and
+  `with expiration`. Operator precedence matches SpiceDB: `+` binds tightest,
+  then `&`, then `-`. Comments starting with `//` are ignored. Caveats and
+  `self` are rejected.
   """
 
   alias Licet.Schema.Parser
@@ -101,16 +103,30 @@ defmodule Licet.Schema do
   end
 
   defp format_expr({:ref, name}), do: name
-  defp format_expr({:union, left, right}), do: format_expr(left) <> " + " <> format_low(right)
+  defp format_expr(:nil_expr), do: "nil"
+  defp format_expr({:union, left, right} = expr), do: format_binary(expr, left, " + ", right)
 
-  defp format_expr({:intersection, left, right}),
-    do: format_low(left) <> " & " <> format_low(right)
+  defp format_expr({:intersection, left, right} = expr),
+    do: format_binary(expr, left, " & ", right)
 
-  defp format_expr({:exclusion, left, right}), do: format_low(left) <> " - " <> format_low(right)
+  defp format_expr({:exclusion, left, right} = expr), do: format_binary(expr, left, " - ", right)
   defp format_expr({:arrow, left, right}), do: format_arrow(left) <> "->" <> format_primary(right)
 
-  defp format_low({:union, _, _} = expr), do: "(" <> format_expr(expr) <> ")"
-  defp format_low(expr), do: format_expr(expr)
+  defp format_expr({:arrow_all, left, {:ref, name}}),
+    do: format_arrow(left) <> ".all(" <> name <> ")"
+
+  defp format_binary(expr, left, op, right) do
+    format_operand(left, precedence(left) < precedence(expr)) <>
+      op <> format_operand(right, precedence(right) <= precedence(expr))
+  end
+
+  defp format_operand(expr, true), do: "(" <> format_expr(expr) <> ")"
+  defp format_operand(expr, false), do: format_expr(expr)
+
+  defp precedence({:exclusion, _, _}), do: 1
+  defp precedence({:intersection, _, _}), do: 2
+  defp precedence({:union, _, _}), do: 3
+  defp precedence(_expr), do: 4
 
   defp format_arrow(left) when is_binary(left), do: left
   defp format_arrow(left), do: "(" <> format_expr(left) <> ")"

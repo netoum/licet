@@ -19,7 +19,16 @@ defmodule Licet.MixProject do
       dialyzer: dialyzer(),
       test_coverage: [
         summary: [threshold: 100],
-        ignore_modules: [Licet.TestRepo, Licet.DataCase, Licet.FakeRepo, Licet.Differential]
+        ignore_modules: [
+          Licet.TestRepo,
+          Licet.DataCase,
+          Licet.FakeRepo,
+          Licet.Differential,
+          Licet.Conformance,
+          Licet.SpiceDB,
+          Licet.SlowReader,
+          Licet.Reader.Licet.SlowReader
+        ]
       ],
       aliases: aliases()
     ]

@@ -7,34 +7,88 @@ defmodule Licet.SubjectsTest do
   alias Licet.Relationship
 
   test "default struct builders run" do
-    assert %Subjects{} = Subjects.__struct__(concrete: %{})
+    assert %Subjects{} = Subjects.__struct__(sets: %{})
     assert %Memory{tuples: []} = Memory.__struct__(tuples: [])
     assert %Postgres{} = Postgres.__struct__([])
     assert %Relationship{} = Relationship.__struct__([])
   end
 
-  test "unions, intersects, and subtracts wildcards" do
-    all = Subjects.allow_all(Subjects.empty(), "user")
-    ada = Subjects.add(Subjects.empty(), "user", "ada")
-    bob = Subjects.add(Subjects.empty(), "user", "bob")
+  defp set(ids), do: Enum.reduce(ids, Subjects.empty(), &Subjects.add(&2, "user", &1))
 
-    union = Subjects.union(ada, all)
-    assert Subjects.to_list(union) == [{"user", "*", ""}]
+  defp listed(set) do
+    Enum.map(Subjects.to_list(set), fn
+      %{subject: {_type, "*", _relation}, excluded: excluded} -> {"*", excluded}
+      %{subject: {_type, id, _relation}} -> id
+    end)
+  end
 
-    both = Subjects.intersection(Subjects.union(ada, bob), ada)
-    assert Subjects.to_list(both) == [{"user", "ada", ""}]
+  test "a wildcard keeps the concrete subjects next to it" do
+    assert listed(Subjects.union(set(["ada"]), set(["*"]))) == [{"*", []}, "ada"]
+    assert listed(set(["*", "ada"])) == [{"*", []}, "ada"]
+    assert Subjects.count(set(["*", "ada"])) == 2
+  end
 
-    assert Subjects.to_list(Subjects.difference(all, ada)) == [{"user", "*", ""}]
-    assert Subjects.count(Subjects.difference(ada, bob)) == 1
-    assert Subjects.to_list(Subjects.difference(all, all)) == []
-    assert Subjects.to_list(Subjects.intersection(all, all)) == [{"user", "*", ""}]
-    assert Subjects.to_list(Subjects.intersection(all, ada)) == [{"user", "ada", ""}]
-    assert Subjects.to_list(Subjects.intersection(ada, all)) == [{"user", "ada", ""}]
-    assert Subjects.to_list(Subjects.difference(ada, all)) == []
+  test "removing a subject from a wildcard records it as excluded" do
+    assert listed(Subjects.difference(set(["*"]), set(["dan"]))) == [{"*", ["dan"]}]
 
-    excluded = Subjects.difference(all, ada)
-    other = Subjects.difference(all, bob)
-    assert Subjects.to_list(Subjects.union(excluded, other)) == [{"user", "*", ""}]
-    assert Subjects.to_list(Subjects.union(excluded, ada)) == [{"user", "*", ""}]
+    assert listed(Subjects.difference(set(["*", "dan", "tom"]), set(["dan"]))) == [
+             {"*", ["dan"]},
+             "tom"
+           ]
+  end
+
+  test "adding an excluded subject back lifts the exclusion" do
+    banned = Subjects.difference(set(["*"]), set(["dan"]))
+    assert listed(Subjects.union(banned, set(["dan"]))) == [{"*", []}, "dan"]
+    assert listed(Subjects.union(set(["dan"]), banned)) == [{"*", []}, "dan"]
+
+    other = Subjects.difference(set(["*"]), set(["eve"]))
+    assert listed(Subjects.union(banned, other)) == [{"*", []}]
+    assert listed(Subjects.union(banned, banned)) == [{"*", ["dan"]}]
+  end
+
+  test "intersections keep the concrete subjects a wildcard allows" do
+    banned = Subjects.difference(set(["*"]), set(["dan"]))
+
+    assert listed(Subjects.intersection(set(["ada", "dan"]), banned)) == ["ada"]
+    assert listed(Subjects.intersection(banned, set(["ada", "dan"]))) == ["ada"]
+    assert listed(Subjects.intersection(set(["ada", "bob"]), set(["ada"]))) == ["ada"]
+    assert listed(Subjects.intersection(set(["*"]), set(["*"]))) == [{"*", []}]
+
+    other = Subjects.difference(set(["*"]), set(["eve"]))
+    assert listed(Subjects.intersection(banned, other)) == [{"*", ["dan", "eve"]}]
+    assert listed(Subjects.intersection(set(["ada"]), Subjects.empty())) == []
+  end
+
+  test "subtracting a wildcard keeps only what it excluded" do
+    banned = Subjects.difference(set(["*"]), set(["dan"]))
+
+    assert listed(Subjects.difference(set(["ada"]), set(["*"]))) == []
+    assert listed(Subjects.difference(set(["*"]), set(["*"]))) == []
+    assert listed(Subjects.difference(set(["ada", "dan"]), banned)) == ["dan"]
+    assert listed(Subjects.difference(set(["*"]), banned)) == ["dan"]
+
+    eve = Subjects.difference(set(["*"]), set(["eve"]))
+    assert listed(Subjects.difference(eve, banned)) == ["dan"]
+    assert listed(Subjects.difference(banned, banned)) == []
+  end
+
+  test "groups subjects by type and relation" do
+    mixed =
+      Subjects.empty()
+      |> Subjects.add("user", "ada")
+      |> Subjects.add("team", "eng", "member")
+      |> Subjects.add("team", "ops")
+
+    assert Subjects.to_list(Subjects.only(mixed, "team", "member")) == [
+             %{subject: {"team", "eng", "member"}, excluded: []}
+           ]
+
+    assert Subjects.to_list(
+             Subjects.difference(mixed, Subjects.add(Subjects.empty(), "user", "ada"))
+           ) == [
+             %{subject: {"team", "eng", "member"}, excluded: []},
+             %{subject: {"team", "ops", ""}, excluded: []}
+           ]
   end
 end

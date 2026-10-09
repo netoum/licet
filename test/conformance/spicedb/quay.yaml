@@ -1,0 +1,101 @@
+---
+schema: |+
+  definition user {}
+
+  definition anonymoususer {}
+
+  caveat is_not_geo_banned(user_ip ipaddress, cidr string) {
+    !user_ip.in_cidr(cidr)
+  }
+
+  definition namespace {
+    relation parent: namespace | organization
+    relation admin: user
+    relation creator: user
+
+    permission can_admin = admin + parent->can_admin
+    permission create = can_admin + parent->create
+  }
+
+  definition organization {
+    relation admin: user | team#member
+    relation creator: user | team#member
+    relation direct_member: user
+
+    permission can_admin = admin
+    permission create = creator + can_admin
+    permission member = direct_member + create
+  }
+
+  definition repo {
+    relation parent: namespace
+    relation admin: user
+    relation writers: user
+    relation readers: user | anonymoususer:* with is_not_geo_banned
+
+    permission can_admin = admin + parent->can_admin
+    permission write = writers + can_admin
+    permission view = readers + write
+  }
+
+  definition team {
+    relation parent_org: organization
+    relation direct_member: user
+
+    permission member = direct_member
+  }
+
+relationships: >-
+  organization:megacorp#admin@user:cto
+
+  team:owners#direct_member@user:cto
+
+  team:owners#direct_member@user:ceo
+
+  team:owners#parent_org@organization:megacorp
+
+  organization:megacorp#admin@team:owners#member
+
+  team:creator#direct_member@user:eng_director
+
+  team:creator#parent_org@organization:megacorp
+
+  organization:megacorp#creator@team:creator#member
+
+  namespace:buynlarge#parent@organization:megacorp
+
+  namespace:buynlarge#admin@user:eng_manager
+
+  repo:buynlarge/orgrepo#parent@namespace:buynlarge
+
+  repo:buynlarge/orgrepo#admin@user:eng_manager
+
+  repo:buynlarge/orgrepo#writers@user:engineer
+
+  repo:buynlarge/orgrepo#readers@user:test_engineer
+
+  namespace:purnkleen#parent@organization:megacorp
+
+  namespace:purnkleen#admin@user:eng_director
+
+  organization:villainorg#admin@user:villain
+
+  repo:buynlarge/orgrepo#readers@anonymoususer:*[is_not_geo_banned:{"cidr":"1.0.0.0/8"}]
+
+assertions:
+  assertTrue:
+    - "repo:buynlarge/orgrepo#view@user:test_engineer"
+    - "repo:buynlarge/orgrepo#view@user:engineer"
+    - "repo:buynlarge/orgrepo#view@user:eng_manager"
+    - "repo:buynlarge/orgrepo#view@user:ceo"
+    - "repo:buynlarge/orgrepo#view@user:cto"
+    - 'repo:buynlarge/orgrepo#view@anonymoususer:dskfjbdkfjb with {"user_ip": "2.3.4.5"}'
+    - 'repo:buynlarge/orgrepo#view@anonymoususer:avbcocdhdsc with {"user_ip": "10.11.12.13"}'
+  assertCaveated:
+    - "repo:buynlarge/orgrepo#view@anonymoususer:dskfjbdkfjb"
+    - "repo:buynlarge/orgrepo#view@anonymoususer:avbcocdhdsc"
+  assertFalse:
+    - "repo:buynlarge/orgrepo#view@user:villain"
+    - "repo:buynlarge/orgrepo#view@user:eng_director"
+    - 'repo:buynlarge/orgrepo#view@anonymoususer:dskfjbdkfjb with {"user_ip": "1.2.3.4"}'
+    - 'repo:buynlarge/orgrepo#view@anonymoususer:avbcocdhdsc with {"user_ip": "1.10.20.30"}'

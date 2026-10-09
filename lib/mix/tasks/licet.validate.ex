@@ -1,6 +1,7 @@
 defmodule Mix.Tasks.Licet.Validate do
   @moduledoc """
-  Checks a SpiceDB validation file against Licet.
+  Checks a SpiceDB validation file against Licet: its assertions and its
+  expected relations. See `Licet.Validate`.
 
       mix licet.validate test/conformance/document.yaml
   """
@@ -27,9 +28,11 @@ defmodule Mix.Tasks.Licet.Validate do
     Mix.raise("usage: mix licet.validate FILE")
   end
 
-  defp format(failures) do
-    Enum.map_join(failures, "\n", fn failure ->
-      "#{failure.assertion} expected #{failure.expected}, got #{inspect(failure.got)}"
-    end)
+  defp format(failures), do: Enum.map_join(failures, "\n", &format_failure/1)
+
+  defp format_failure(%{assertion: assertion, expected: expected, got: got}) do
+    "#{assertion} expected #{expected}, got #{inspect(got)}"
   end
+
+  defp format_failure(%{message: message}), do: message
 end

@@ -188,8 +188,8 @@ jobs:
       - name: Install dependencies
         run: mix deps.get
 
-      - name: Differential cases
-        run: mix test test/licet/validate_test.exs --only spicedb --include spicedb
+      - name: Differential cases and live corpus
+        run: mix test --only spicedb --include spicedb
 
   example:
     name: Example blog
@@ -228,6 +228,35 @@ jobs:
 
       - name: Install dependencies
         run: mix deps.get
+
+      - name: mix test
+        run: mix test
+
+  playground:
+    name: Playground
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: examples/playground
+    env:
+      MIX_ENV: test
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.19.5"
+          otp-version: "28.3"
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: mix format
+        run: mix format --check-formatted
+
+      - name: mix compile
+        run: mix compile --warnings-as-errors
 
       - name: mix test
         run: mix test

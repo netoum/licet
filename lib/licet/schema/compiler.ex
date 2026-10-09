@@ -51,6 +51,7 @@ defmodule Licet.Schema.Compiler do
   end
 
   defp compile_expr({:name, name, _offset}), do: {:ref, name}
+  defp compile_expr({:nil_expr, _offset}), do: :nil_expr
   defp compile_expr({:union, left, right}), do: {:union, compile_expr(left), compile_expr(right)}
 
   defp compile_expr({:intersection, left, right}),
@@ -59,12 +60,12 @@ defmodule Licet.Schema.Compiler do
   defp compile_expr({:exclusion, left, right}),
     do: {:exclusion, compile_expr(left), compile_expr(right)}
 
-  defp compile_expr({:arrow, {:name, name, _offset}, right}) do
-    {:arrow, name, compile_expr(right)}
+  defp compile_expr({kind, {:name, name, _offset}, right}) when kind in [:arrow, :arrow_all] do
+    {kind, name, compile_expr(right)}
   end
 
-  defp compile_expr({:arrow, left, right}) do
-    {:arrow, compile_expr(left), compile_expr(right)}
+  defp compile_expr({kind, left, right}) when kind in [:arrow, :arrow_all] do
+    {kind, compile_expr(left), compile_expr(right)}
   end
 
   defp hash(source) do

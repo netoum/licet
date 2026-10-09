@@ -16,7 +16,7 @@ defmodule Licet.Schema.Parser do
   word =
     byte_offset(
       ascii_char([?a..?z])
-      |> ascii_string([?a..?z, ?0..?9, ?_], min: 2, max: 63)
+      |> ascii_string([?a..?z, ?0..?9, ?_], min: 0, max: 63)
     )
     |> reduce(:pack_word)
 
@@ -34,6 +34,8 @@ defmodule Licet.Schema.Parser do
   pipe = byte_offset(string("|")) |> reduce({:pack_sym, [:pipe]})
   slash = byte_offset(string("/")) |> reduce({:pack_sym, [:slash]})
   hash = byte_offset(string("#")) |> reduce({:pack_sym, [:hash]})
+  dot = byte_offset(string(".")) |> reduce({:pack_sym, [:dot]})
+  other = byte_offset(utf8_string([], 1)) |> reduce(:pack_other)
 
   defparsec(
     :scan,
@@ -55,7 +57,9 @@ defmodule Licet.Schema.Parser do
         pipe,
         slash,
         hash,
-        word
+        dot,
+        word,
+        other
       ]),
       max: @max_tokens
     )
@@ -73,9 +77,8 @@ defmodule Licet.Schema.Parser do
           {:error, message, offset} -> failure(source, message, offset)
         end
 
-      {:error, message, _rest, _context, line, offset} ->
-        {row, column} = line_pair(line)
-        {:error, message, row, column_number(column, offset)}
+      {:error, message, _rest, _context, _line, offset} ->
+        failure(source, message, offset)
     end
   end
 
@@ -84,16 +87,14 @@ defmodule Licet.Schema.Parser do
     {:error, message, line, column}
   end
 
-  defp line_pair({row, column}), do: {row, column}
-
-  defp column_number(column, _offset) when is_integer(column) and column > 0, do: column
-  defp column_number(_column, offset), do: offset + 1
-
   defp document(tokens) do
     with {:ok, expiration, tokens} <- use_expiration(tokens, false),
          {:ok, definitions, []} <- definitions(tokens, []) do
       {:ok, parts(expiration, definitions)}
     else
+      {:ok, _definitions, [{:other, char, offset} | _rest]} ->
+        {:error, "unexpected character #{char}", offset}
+
       {:ok, _definitions, [{_kind, _value, offset} | _rest]} ->
         {:error, "unexpected token", offset}
 
@@ -111,6 +112,10 @@ defmodule Licet.Schema.Parser do
 
   defp use_expiration([{:word, "use", offset}, {:word, "expiration", _} | _rest], true) do
     {:error, "use expiration is repeated", offset}
+  end
+
+  defp use_expiration([{:word, "use", _}, {:word, "self", offset} | _rest], _seen) do
+    {:error, "self is not supported", offset}
   end
 
   defp use_expiration([{:word, "use", offset} | _rest], _seen) do
@@ -233,8 +238,16 @@ defmodule Licet.Schema.Parser do
 
   defp subject_tail(tokens), do: {:ok, nil, tokens}
 
+  defp expiration_mark([{:word, "with", _}, {:word, "expiration", _}, {:word, "and", offset} | _]) do
+    {:error, "caveats are not supported", offset}
+  end
+
   defp expiration_mark([{:word, "with", _offset}, {:word, "expiration", _} | tokens]) do
     {:ok, true, tokens}
+  end
+
+  defp expiration_mark([{:word, "with", _}, {:word, _caveat, offset} | _rest]) do
+    {:error, "caveats are not supported", offset}
   end
 
   defp expiration_mark([{:word, "with", offset} | _rest]) do
@@ -255,24 +268,35 @@ defmodule Licet.Schema.Parser do
     {:ok, %{name: Enum.join(segments, "/"), offset: offset, segments: segments}, tokens}
   end
 
-  defp expr(tokens), do: low(tokens)
+  defp expr(tokens), do: exclusion(tokens)
 
-  defp low(tokens) do
+  defp exclusion(tokens) do
+    with {:ok, left, tokens} <- intersection(tokens) do
+      exclusion_rest(left, tokens)
+    end
+  end
+
+  defp exclusion_rest(left, [{:sym, :minus, _} | tokens]) do
+    with {:ok, right, tokens} <- intersection(tokens) do
+      exclusion_rest({:exclusion, left, right}, tokens)
+    end
+  end
+
+  defp exclusion_rest(left, tokens), do: {:ok, left, tokens}
+
+  defp intersection(tokens) do
     with {:ok, left, tokens} <- union(tokens) do
-      low_rest(left, tokens)
+      intersection_rest(left, tokens)
     end
   end
 
-  defp low_rest(left, [{:sym, op, _} | tokens]) when op in [:amp, :minus] do
+  defp intersection_rest(left, [{:sym, :amp, _} | tokens]) do
     with {:ok, right, tokens} <- union(tokens) do
-      low_rest(low_node(op, left, right), tokens)
+      intersection_rest({:intersection, left, right}, tokens)
     end
   end
 
-  defp low_rest(left, tokens), do: {:ok, left, tokens}
-
-  defp low_node(:amp, left, right), do: {:intersection, left, right}
-  defp low_node(:minus, left, right), do: {:exclusion, left, right}
+  defp intersection_rest(left, tokens), do: {:ok, left, tokens}
 
   defp union(tokens) do
     with {:ok, left, tokens} <- arrow(tokens) do
@@ -300,7 +324,25 @@ defmodule Licet.Schema.Parser do
     end
   end
 
+  defp arrow_rest(left, [
+         {:sym, :dot, _},
+         {:word, function, _},
+         {:sym, :lparen, _},
+         {:word, name, offset},
+         {:sym, :rparen, _} | tokens
+       ])
+       when function in ["any", "all"] do
+    arrow_rest({arrow_function(function), left, {:name, name, offset}}, tokens)
+  end
+
+  defp arrow_rest(_left, [{:sym, :dot, offset} | _tokens]) do
+    {:error, "expected .any(name) or .all(name)", offset}
+  end
+
   defp arrow_rest(left, tokens), do: {:ok, left, tokens}
+
+  defp arrow_function("any"), do: :arrow
+  defp arrow_function("all"), do: :arrow_all
 
   defp primary([{:sym, :lparen, _} | tokens]) do
     with {:ok, inner, tokens} <- expr(tokens),
@@ -309,6 +351,8 @@ defmodule Licet.Schema.Parser do
     end
   end
 
+  defp primary([{:word, "nil", offset} | tokens]), do: {:ok, {:nil_expr, offset}, tokens}
+  defp primary([{:word, "self", offset} | _tokens]), do: {:error, "self is not supported", offset}
   defp primary([{:word, name, offset} | tokens]), do: {:ok, {:name, name, offset}, tokens}
   defp primary([{_kind, _value, offset} | _rest]), do: {:error, "expected an expression", offset}
   defp primary([]), do: {:error, "expected an expression", 0}
@@ -329,4 +373,6 @@ defmodule Licet.Schema.Parser do
   defp pack_sym([{[bin], ending}], kind) when is_binary(bin) do
     {:sym, kind, ending - byte_size(bin)}
   end
+
+  defp pack_other([{[bin], ending}]), do: {:other, bin, ending - byte_size(bin)}
 end

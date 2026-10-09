@@ -1,0 +1,74 @@
+---
+schema: |+
+  definition user {}
+
+  definition resource {
+  	relation manager: user | usergroup#member | usergroup#manager
+  	relation viewer: user | usergroup#member | usergroup#manager
+      permission view = viewer + manager
+  }
+
+  definition usergroup {
+  	relation manager: user | usergroup#member | usergroup#manager
+  	relation direct_member: user | usergroup#member | usergroup#manager
+      permission member = direct_member + manager
+  }
+
+  definition organization {
+  	relation group: usergroup
+  	relation resource: resource
+  	relation admin: user | usergroup#member | usergroup#manager
+  	permission member = admin + group->member
+  	permission user = admin + member + resource->view
+  }
+
+relationships: >-
+  usergroup:productname#manager@user:an_eng_manager#...
+
+  usergroup:productname#direct_member@user:an_engineer#...
+
+  usergroup:applications#manager@user:an_eng_director#...
+
+  usergroup:engineering#manager@user:cto#...
+
+  usergroup:csuite#manager@user:ceo#...
+
+  usergroup:csuite#direct_member@user:cto#...
+
+  usergroup:engineering#direct_member@usergroup:applications#member
+
+  usergroup:applications#direct_member@usergroup:productname#member
+
+  usergroup:engineering#direct_member@usergroup:csuite#member
+
+  organization:someorg#group@usergroup:csuite#...
+
+  organization:someorg#group@usergroup:productname#...
+
+  organization:someorg#group@usergroup:applications#...
+
+  organization:someorg#group@usergroup:engineering#...
+
+  organization:someorg#resource@resource:promserver#...
+
+  organization:someorg#resource@resource:jira#...
+
+  organization:someorg#admin@usergroup:csuite#member
+
+  organization:someorg#admin@user:it_admin#...
+
+  resource:promserver#manager@usergroup:productname#member
+
+  resource:promserver#viewer@usergroup:engineering#member
+
+  resource:jira#viewer@usergroup:engineering#member
+
+  resource:jira#manager@usergroup:engineering#manager
+
+  resource:promserver#viewer@user:an_external_user#...
+
+  usergroup:blackhats#manager@user:a_villain#...
+
+assertions:
+  assertTrue: []
+  assertFalse: []

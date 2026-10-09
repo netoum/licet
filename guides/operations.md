@@ -23,10 +23,11 @@
 {:ok, ids, cursor} = Licet.lookup_resources(MyApp.Licet, "document", "view", "user:ada", limit: 100)
 {:ok, more, nil} = Licet.lookup_resources(MyApp.Licet, "document", "view", "user:ada", cursor: cursor, limit: 100)
 
-{:ok, subjects, _cursor} = Licet.lookup_subjects(MyApp.Licet, "document:1", "view")
+{:ok, users, _cursor} = Licet.lookup_subjects(MyApp.Licet, "document:1", "view", "user")
+{:ok, teams, _cursor} = Licet.lookup_subjects(MyApp.Licet, "document:1", "view", "team#member")
 ```
 
-Subjects are rendered as `user:ada` or `team:eng#member`. A result bigger than `max_lookup` returns `:lookup_too_large`.
+`lookup_subjects/5` works like SpiceDB's LookupSubjects: it returns the subjects of one type, or of one userset type such as `team#member`. Each result is a map such as `%{subject: "user:ada", excluded: []}`. A wildcard lists the subjects it leaves out, so `%{subject: "user:*", excluded: ["user:dan"]}` means every user except Dan. Concrete subjects are listed next to a wildcard that also covers them. A userset counts as a member of itself, so `team:eng#member` appears when the lookup reaches it. A result bigger than `max_lookup` returns `:lookup_too_large`.
 
 ## Explain
 

@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html
+  lang="en"
+  data-theme="neo"
+  data-mode={@mode}
+>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="csrf-token" content={get_csrf_token()} />
+    <meta
+      name="description"
+      content="Licet playground: SpiceDB validation files checked by Licet."
+    />
+    <.live_title default="Licet playground">
+      {assigns[:page_title]}
+    </.live_title>
+    <link phx-track-static rel="stylesheet" href={~p"/assets/css/app.css"} />
+    <script defer phx-track-static type="module" src={~p"/assets/js/app.js"}>
+    </script>
+    <script>
+      (() => {
+        const getSystemMode = () =>
+          window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+
+        const setMode = (mode) => {
+          const resolved = mode === "dark" || mode === "light" ? mode : getSystemMode();
+          localStorage.setItem("phx:mode", resolved);
+          document.cookie = "phx_mode=" + resolved + "; path=/; max-age=31536000";
+          document.documentElement.setAttribute("data-mode", resolved);
+        };
+
+        setMode(
+          localStorage.getItem("phx:mode") ||
+            document.documentElement.getAttribute("data-mode") ||
+            getSystemMode()
+        );
+
+        window.addEventListener(
+          "storage",
+          (e) => e.key === "phx:mode" && e.newValue && setMode(e.newValue)
+        );
+
+        window.addEventListener("phx:set-mode", (e) => {
+          const detail = e.detail;
+          if (typeof detail?.pressed === "boolean") {
+            setMode(detail.pressed ? "dark" : "light");
+            return;
+          }
+          const value = detail?.value;
+          const mode = Array.isArray(value) && value[0] ? value[0] : "light";
+          setMode(mode);
+        });
+      })();
+    </script>
+  </head>
+  <body class="typo flex min-h-dvh min-w-0 flex-col overflow-x-hidden bg-root text-ink antialiased scrollbar scrollbar--sm [scrollbar-gutter:stable]">
+    {@inner_content}
+  </body>
+</html>

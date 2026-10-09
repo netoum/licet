@@ -12,7 +12,7 @@ The following are not implemented and will not be added as a silent change insid
 
 * Watch and a LiveView subscription API
 * Caveats and CEL
-* `.all()`, `.any()`, and `self`
+* `self`
 * A networked AuthZEN service, read replicas, and materialized permissions
 
 A 1.x release may add optional APIs. It will not change the visibility rules or the token format without a major version. Token version `1` is the `v1.` prefix.

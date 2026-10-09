@@ -15,6 +15,55 @@ defmodule LicetTest do
   }
   """
 
+  test "looks up subjects of one type, like SpiceDB's LookupSubjects" do
+    name =
+      start_licet!("""
+      definition user {}
+      definition team {
+        relation member: user
+      }
+      definition document {
+        relation viewer: user | user:* | team#member
+        relation banned: user
+        permission view = viewer - banned
+      }
+      """)
+
+    assert {:ok, _token} =
+             Licet.write(name, [
+               {:touch, "document:1#viewer@user:*"},
+               {:touch, "document:1#viewer@user:cara"},
+               {:touch, "document:1#viewer@team:eng#member"},
+               {:touch, "team:eng#member@user:dan"},
+               {:touch, "document:1#banned@user:eve"}
+             ])
+
+    assert {:ok, users, nil} = Licet.lookup_subjects(name, "document:1", "view", "user")
+
+    assert users == [
+             %{subject: "user:*", excluded: ["user:eve"]},
+             %{subject: "user:cara", excluded: []},
+             %{subject: "user:dan", excluded: []}
+           ]
+
+    assert {:ok, [%{subject: "team:eng#member", excluded: []}], nil} =
+             Licet.lookup_subjects(name, "document:1", "view", "team#member")
+
+    assert {:ok, [%{subject: "user:*"}], cursor} =
+             Licet.lookup_subjects(name, "document:1", "view", "user", limit: 1)
+
+    assert {:ok, [%{subject: "user:cara"}], _cursor} =
+             Licet.lookup_subjects(name, "document:1", "view", "user", limit: 1, cursor: cursor)
+
+    for bad <- ["User", "team#Member", "", 1] do
+      assert {:error, %{reason: :invalid_filter}} =
+               Licet.lookup_subjects(name, "document:1", "view", bad)
+    end
+
+    assert {:error, %{reason: :invalid_filter}} =
+             Licet.lookup_subjects(name, "document:1", "view", "user", cursor: "nope")
+  end
+
   test "writes, checks, reads, and deletes inside a transaction" do
     name = start_licet!(@schema)
 
@@ -29,8 +78,9 @@ defmodule LicetTest do
     assert {:ok, :allowed} = Licet.check(name, "document:1", "view", "user:ada")
     assert {:ok, :denied} = Licet.check(name, "document:1", "view", "user:bob")
     assert {:ok, ["2"], nil} = Licet.lookup_resources(name, "document", "view", "user:bob")
-    assert {:ok, subjects, nil} = Licet.lookup_subjects(name, "document:1", "view")
-    assert "user:ada" in subjects
+
+    assert {:ok, [%{subject: "user:ada", excluded: []}], nil} =
+             Licet.lookup_subjects(name, "document:1", "view", "user")
 
     assert {:ok, :allowed, %{result: :allowed}} =
              Licet.explain(name, "document:1", "view", "user:ada")
