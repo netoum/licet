@@ -115,9 +115,16 @@ Failures use the same messages as SpiceDB. The file runs in memory and doesn't n
 
 Writing the `validation` section by hand is tedious. `Licet.Validate.expected_relations/1` computes it from the schema and relationships, in the same format the playground writes, so you can review it once and commit it.
 
+`Licet.Validate.explain/2` explains one assertion line against the YAML file. For a running instance and Postgres relationships, use `Licet.explain/5` instead; see [Operations](operations.md).
+
+| Function | Relationships | When to use |
+| --- | --- | --- |
+| `Licet.Validate.explain/2` | Validation YAML (in memory) | This guide, CI, the playground |
+| `Licet.explain/5` | A running Licet instance | Production debugging |
+
 ## A playground
 
-The repository includes `examples/playground`, a small Phoenix app for editing a validation file in the browser. It checks the file as you type, imports and exports playground YAML, and recomputes the expected relations. It needs no database:
+The repository includes `examples/playground`, a small Phoenix app for editing a validation file in the browser. It checks the file as you type, imports and exports playground YAML, recomputes the expected relations, and explains one check with `Licet.Validate.explain/2`. It needs no database:
 
 ```shell
 cd examples/playground

@@ -266,18 +266,22 @@ defmodule Licet.Engine do
   defp arrow_target(tuple), do: [{tuple.subject_type, tuple.subject_id}]
 
   defp decide(targets, ctx, fun) when is_list(targets) do
-    Enum.reduce_while(targets, {:ok, :denied}, fn target, acc ->
+    Enum.reduce_while(targets, {:ok, :denied, []}, fn target, acc ->
       case fun.(ctx, target) do
-        {:ok, :allowed, _trace} -> {:halt, {:ok, :allowed}}
-        {:ok, :denied, _trace} -> {:cont, acc}
-        {:error, error} -> {:halt, {:error, error}}
+        {:ok, :allowed, children} when is_list(children) ->
+          {:halt, {:ok, :allowed, children}}
+
+        {:ok, :allowed, %{} = trace} ->
+          {:halt, {:ok, :allowed, [trace]}}
+
+        {:ok, :denied, _trace} ->
+          {:cont, acc}
+
+        {:error, error} ->
+          {:halt, {:error, error}}
       end
     end)
-    |> wrap_children()
   end
-
-  defp wrap_children({:ok, answer}), do: {:ok, answer, []}
-  defp wrap_children({:error, error}), do: {:error, error}
 
   defp answers_only({:ok, answer, children}), do: {:ok, answer, children}
   defp answers_only({:error, error}), do: {:error, error}

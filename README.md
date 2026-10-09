@@ -107,6 +107,11 @@ By default a check reads a snapshot that is refreshed every few seconds and shar
 * **Several services need the same permissions**, or you need caveats or a stream of changes: run [SpiceDB](https://authzed.com/docs/spicedb) and call it with the [`authzed`](https://hex.pm/packages/authzed) client. Licet's [limitations](guides/limitations.md) page lists what it leaves out.
 * **Your rules are simple roles**, such as "admins can do everything": a policy module with [Bodyguard](https://hex.pm/packages/bodyguard) or [LetMe](https://hex.pm/packages/let_me) is less to learn.
 
+## Examples
+
+* [`examples/blog`](examples/blog) — a small Phoenix JSON API with Postgres: create a post and its owner in one transaction, then fetch and list with `Licet.check/5` and `Licet.check_bulk/3`.
+* [`examples/playground`](examples/playground) — a local SpiceDB validation-file editor. It needs no database: assertions and expected relations run through `Licet.Validate`, and you can explain one check as you type.
+
 ## Documentation
 
 * [Getting started](guides/getting-started.md)

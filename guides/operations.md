@@ -74,6 +74,13 @@ Only a wildcard excludes anything. `user:*` with `user:dan` excluded means every
 
 ## Debugging a check
 
+There are two explain APIs. Use the one that matches where the relationships live:
+
+| Function | Relationships | When to use |
+| --- | --- | --- |
+| `Licet.explain/5` | A running Licet instance (Postgres) | Debug a live check in your app |
+| `Licet.Validate.explain/2` | A validation YAML file (in memory) | CI, `mix licet.validate`, or the [playground](testing.md) |
+
 `Licet.explain/5` returns the answer and a trace of the permissions it evaluated:
 
 ```elixir

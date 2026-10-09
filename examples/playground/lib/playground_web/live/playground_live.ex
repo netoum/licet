@@ -16,6 +16,8 @@ defmodule PlaygroundWeb.PlaygroundLive do
      socket
      |> assign(:page_title, "Licet playground")
      |> assign(:mode, Map.get(session, "mode", "light"))
+     |> assign(:explain_line, "")
+     |> assign(:explain_output, nil)
      |> allow_upload(:yaml,
        accept: ~w(.yaml .yml),
        max_entries: 1,
@@ -59,6 +61,10 @@ defmodule PlaygroundWeb.PlaygroundLive do
     {:noreply, load(socket, Document.example())}
   end
 
+  def handle_event("explain", %{"explain" => %{"line" => line}}, socket) do
+    {:noreply, explain(socket, line)}
+  end
+
   def handle_event("file_upload_live_cancel", params, socket) do
     {:noreply, Corex.FileUploadLive.cancel_upload_from_params(socket, :yaml, params)}
   end
@@ -88,6 +94,34 @@ defmodule PlaygroundWeb.PlaygroundLive do
     |> assign(:document, document)
     |> assign(:yaml, yaml)
     |> assign(:result, Playground.Result.new(yaml))
+    |> reexplain()
+  end
+
+  defp reexplain(%{assigns: %{explain_line: line}} = socket)
+       when is_binary(line) and line != "" do
+    explain(socket, line)
+  end
+
+  defp reexplain(socket), do: socket
+
+  defp explain(socket, line) do
+    line = String.trim(line)
+
+    output =
+      cond do
+        line == "" ->
+          "Enter a check such as document:readme#view@user:carl"
+
+        true ->
+          case Licet.Validate.explain(socket.assigns.yaml, line) do
+            {:ok, _answer, trace} -> Playground.Result.format_trace(trace)
+            {:error, %Licet.Error{message: message}} -> message
+          end
+      end
+
+    socket
+    |> assign(:explain_line, line)
+    |> assign(:explain_output, output)
   end
 
   defp toast_error(%{assigns: %{result: %{error: %Licet.Error{} = error}}} = socket) do
@@ -191,6 +225,30 @@ defmodule PlaygroundWeb.PlaygroundLive do
               <.code id="expected" class="code" code={Enum.join(@result.expected, "\n\n")} />
             </div>
 
+            <div id="explain" class="flex flex-col gap-space-sm">
+              <h2 class="m-0 text-sm font-semibold">Explain a check</h2>
+              <form
+                id="explain-form"
+                phx-submit="explain"
+                class="flex w-full max-w-none flex-col gap-space"
+              >
+                <.native_input
+                  id="explain-line"
+                  type="text"
+                  name="explain[line]"
+                  value={@explain_line}
+                  class="native-input font-mono"
+                  placeholder="document:readme#view@user:carl"
+                >
+                  <:label>resource#permission@subject</:label>
+                </.native_input>
+                <.action id="explain-submit" type="submit" class="button">
+                  <.heroicon name="hero-magnifying-glass" /> Explain
+                </.action>
+              </form>
+              <.code :if={@explain_output} id="explain-output" class="code" code={@explain_output} />
+            </div>
+
             <div class="flex flex-col gap-space-sm">
               <h2 class="m-0 text-sm font-semibold">Import and export</h2>
               <form id="import-form" phx-change="import" class="w-full max-w-none">
@@ -223,11 +281,11 @@ defmodule PlaygroundWeb.PlaygroundLive do
     """
   end
 
-  attr :id, :string, required: true
-  attr :field, :string, required: true
-  attr :value, :string, required: true
-  attr :rows, :string, required: true
-  attr :label, :string, required: true
+  attr(:id, :string, required: true)
+  attr(:field, :string, required: true)
+  attr(:value, :string, required: true)
+  attr(:rows, :string, required: true)
+  attr(:label, :string, required: true)
 
   defp editor(assigns) do
     ~H"""
@@ -245,7 +303,7 @@ defmodule PlaygroundWeb.PlaygroundLive do
     """
   end
 
-  attr :result, Playground.Result, required: true
+  attr(:result, Playground.Result, required: true)
 
   defp result_summary(%{result: %{error: %Licet.Error{}}} = assigns) do
     ~H"""

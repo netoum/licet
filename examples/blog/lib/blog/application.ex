@@ -7,10 +7,13 @@ defmodule Blog.Application do
   def start(_type, _args) do
     children =
       [
-        Blog.Repo,
-        {Phoenix.PubSub, name: Blog.PubSub},
-        BlogWeb.Endpoint
-      ] ++ licet()
+        Blog.Repo
+      ] ++
+        licet() ++
+        [
+          {Phoenix.PubSub, name: Blog.PubSub},
+          BlogWeb.Endpoint
+        ]
 
     Supervisor.start_link(children, strategy: :one_for_one, name: Blog.Supervisor)
   end

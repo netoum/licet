@@ -1,6 +1,6 @@
 # Phoenix integration
 
-This guide shows where Licet fits in a Phoenix application: granting access when a record is created, checking access in contexts, controllers, and LiveViews, and filtering lists. The code follows the blog app in [`examples/blog`](https://github.com/netoum/licet/tree/main/examples/blog), which uses this schema:
+This guide shows where Licet fits in a Phoenix application: granting access when a record is created, checking access in contexts, filtering lists, and common plug and LiveView patterns. The runnable JSON blog in [`examples/blog`](https://github.com/netoum/licet/tree/main/examples/blog) implements create, fetch, and list with this schema. The plug, LiveView, and sharing sections below are patterns that go beyond that example.
 
 ```zed
 definition user {}
@@ -32,17 +32,19 @@ Use `Application.app_dir/2` for the schema path so it resolves inside a release.
 
 ## Granting access when a record is created
 
-Write the owner relationship in the same transaction as the insert. If either fails, both roll back, so there's never a post without an owner or an owner of a post that doesn't exist. `Licet.Multi.write/5` adds the write as a step of an `Ecto.Multi`:
+Write the owner relationship in the same transaction as the insert. If either fails, both roll back, so there's never a post without an owner or an owner of a post that doesn't exist:
 
 ```elixir
 defmodule MyApp.Posts do
   alias MyApp.{Post, Repo}
 
-  def create_post(%{id: user_id}, attrs) do
+  def create_post(author_id, attrs) when is_binary(author_id) do
+    changeset = Post.changeset(%Post{}, Map.put(attrs, :author_id, author_id))
+
     Ecto.Multi.new()
-    |> Ecto.Multi.insert(:post, Post.changeset(%Post{}, attrs))
+    |> Ecto.Multi.insert(:post, changeset)
     |> Ecto.Multi.run(:grant, fn _repo, %{post: post} ->
-      Licet.write(MyApp.Licet, [{:create, "post:#{post.id}#owner@user:#{user_id}"}])
+      Licet.write(MyApp.Licet, [{:create, "post:#{post.id}#owner@user:#{author_id}"}])
     end)
     |> Repo.transaction()
   end
@@ -55,23 +57,29 @@ The result includes the write's token in `:grant`. Keep it if the next request m
 
 ## Checking in a context
 
-Put the authorization check next to the data access it protects, so every caller gets it:
+Put the authorization check next to the data access it protects, so every caller gets it. At the context boundary, treat both denial and a Licet error (for example a timeout) as `:not_found`, so a failed check never reveals that a record exists and never opens access by accident:
 
 ```elixir
-def fetch_post(%{id: user_id}, id) do
+def fetch_post(user_id, id) when is_binary(user_id) do
   case Licet.check(MyApp.Licet, "post:#{id}", "view", "user:#{user_id}") do
-    {:ok, :allowed} -> {:ok, Repo.get!(Post, id)}
-    {:ok, :denied} -> {:error, :not_found}
-    {:error, %Licet.Error{} = error} -> {:error, error}
+    {:ok, :allowed} ->
+      case Repo.get(Post, id) do
+        nil -> {:error, :not_found}
+        post -> {:ok, post}
+      end
+
+    {:ok, :denied} ->
+      {:error, :not_found}
+
+    {:error, _error} ->
+      {:error, :not_found}
   end
 end
 ```
 
-Returning `:not_found` on denial avoids telling a user that a record they can't see exists. Treat `{:error, _}` as a denial too: when Licet can't answer, for example because the check timed out, the safe default is no access.
-
 ## Checking in a plug
 
-A function plug can protect a group of routes. This one checks a permission on the resource named by a path parameter:
+A function plug can protect a group of routes. This pattern is not in the blog example; use it when you have authenticated `current_user` assigns:
 
 ```elixir
 defmodule MyAppWeb.Authorize do
@@ -137,19 +145,50 @@ end
 
 ## Filtering lists
 
-To show only the posts a user can view, ask Licet for the ids, then load them:
+When the posts already live in your tables, page them in SQL and filter the page with `Licet.check_bulk/3`. That is what [`examples/blog`](https://github.com/netoum/licet/tree/main/examples/blog) does:
 
 ```elixir
-def list_posts(%{id: user_id}) do
-  {:ok, ids, _cursor} =
-    Licet.lookup_resources(MyApp.Licet, "post", "view", "user:#{user_id}", limit: 100)
+def list_posts(user_id, opts \\ []) when is_binary(user_id) do
+  limit = Keyword.get(opts, :limit, 20)
+  after_id = Keyword.get(opts, :after_id)
 
-  ids = Enum.map(ids, &String.to_integer/1)
-  Repo.all(from p in Post, where: p.id in ^ids, order_by: [desc: p.inserted_at])
+  query =
+    from(p in Post,
+      order_by: [desc: p.id],
+      limit: ^limit
+    )
+
+  query =
+    if after_id do
+      from(p in query, where: p.id < ^after_id)
+    else
+      query
+    end
+
+  candidates = Repo.all(query)
+
+  checks =
+    Enum.map(candidates, fn post ->
+      %{resource: "post:#{post.id}", permission: "view", subject: "user:#{user_id}"}
+    end)
+
+  case Licet.check_bulk(MyApp.Licet, checks) do
+    {:ok, results} ->
+      posts =
+        candidates
+        |> Enum.zip(results)
+        |> Enum.filter(fn {_post, result} -> result == {:ok, :allowed} end)
+        |> Enum.map(fn {post, _result} -> post end)
+
+      {:ok, posts}
+
+    {:error, _error} ->
+      {:ok, []}
+  end
 end
 ```
 
-Licet returns ids as strings, so convert them when your primary keys are integers. Results come in pages of `:limit` ids, sorted by id. Pass the returned cursor as `:cursor` to get the next page.
+A page can be shorter than `limit` when some rows are denied. If `check_bulk` itself fails (for example the snapshot can't be resolved), return an empty list so the page fails closed. Prefer this over `Licet.lookup_resources/5` when SQL already names the candidates: a lookup computes the full result before paging and fails with `:lookup_too_large` past `max_lookup`. Use `lookup_resources/5` when the candidate set is the permission graph itself; see [Operations](operations.md).
 
 ## Seeing your own writes
 

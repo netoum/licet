@@ -175,6 +175,53 @@ defmodule Licet.Validate do
     end
   end
 
+  @doc """
+  Explains one check against the schema and relationships in the validation YAML.
+
+  `line` is an assertion string such as `"document:1#view@user:ada"`. The check
+  runs in memory, the same way as `run/1`, and returns the answer with a trace
+  of the relations evaluated beneath it. Use it from the playground, or when
+  debugging a failing assertion without starting Postgres.
+
+  ## Examples
+
+      iex> {:ok, :allowed, trace} =
+      ...>   Licet.Validate.explain(
+      ...>     \"""
+      ...>     schema: |-
+      ...>       definition user {}
+      ...>       definition document {
+      ...>         relation viewer: user
+      ...>         permission view = viewer
+      ...>       }
+      ...>     relationships: |-
+      ...>       document:1#viewer@user:ada
+      ...>     \""",
+      ...>     "document:1#view@user:ada"
+      ...>   )
+      iex> {trace.resource, trace.permission, trace.result}
+      {"document:1", "view", :allowed}
+  """
+  @spec explain(String.t(), String.t()) ::
+          {:ok, :allowed | :denied, map()} | {:error, Error.t()}
+  def explain(source, line) when is_binary(source) and is_binary(line) do
+    with {:ok, file} <- parse(source),
+         {:ok, rel} <- Relationship.parse(line) do
+      resource = %{type: rel.resource_type, id: rel.resource_id, relation: ""}
+      subject = %{type: rel.subject_type, id: rel.subject_id, relation: rel.subject_relation}
+
+      Engine.explain(
+        file.schema,
+        reader(file),
+        revision(),
+        resource,
+        rel.relation,
+        subject,
+        @check_opts
+      )
+    end
+  end
+
   defp read_yaml(source) do
     case YamlElixir.read_from_string(source, atoms: false) do
       {:ok, data} when is_map(data) -> {:ok, data}

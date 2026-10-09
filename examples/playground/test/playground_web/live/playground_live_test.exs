@@ -63,6 +63,31 @@ defmodule PlaygroundWeb.PlaygroundLiveTest do
     assert has_element?(view, "#summary", "Every assertion and expected relation holds")
   end
 
+  test "explains a check from the example", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    view
+    |> form("#explain-form", %{explain: %{line: "document:readme#view@user:carl"}})
+    |> render_submit()
+
+    output = view |> element("#explain-output") |> render()
+    assert output =~ "document:readme#view: allowed"
+    assert output =~ "folder:handbook#viewer"
+    assert output =~ "group:"
+  end
+
+  test "a nonsense explain line shows an error", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    view
+    |> form("#explain-form", %{explain: %{line: "not-a-check"}})
+    |> render_submit()
+
+    output = view |> element("#explain-output") |> render()
+    refute output =~ "allowed"
+    assert output =~ "not valid"
+  end
+
   test "imports a playground file", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/")
 

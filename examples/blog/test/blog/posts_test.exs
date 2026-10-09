@@ -24,4 +24,24 @@ defmodule Blog.PostsTest do
     assert {:ok, :allowed} = Licet.check(Blog.Licet, "post:#{post.id}", "view", "user:ada")
     assert {:ok, :denied} = Licet.check(Blog.Licet, "post:#{post.id}", "view", "user:bob")
   end
+
+  test "the author can fetch and list the post; another user cannot" do
+    assert {:ok, %{post: post}} = Blog.Posts.create_post("ada", %{title: "Hello"})
+
+    assert {:ok, ^post} = Blog.Posts.fetch_post("ada", post.id)
+    assert {:error, :not_found} = Blog.Posts.fetch_post("bob", post.id)
+
+    assert {:ok, [^post]} = Blog.Posts.list_posts("ada")
+    assert {:ok, []} = Blog.Posts.list_posts("bob")
+  end
+
+  test "a viewer relationship makes the post visible to that user" do
+    assert {:ok, %{post: post}} = Blog.Posts.create_post("ada", %{title: "Shared"})
+
+    assert {:ok, _token} =
+             Licet.write(Blog.Licet, [{:create, "post:#{post.id}#viewer@user:bob"}])
+
+    assert {:ok, ^post} = Blog.Posts.fetch_post("bob", post.id)
+    assert {:ok, [^post]} = Blog.Posts.list_posts("bob")
+  end
 end

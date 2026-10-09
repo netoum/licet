@@ -113,7 +113,7 @@ Licet.lookup_subjects(MyApp.Licet, "document:roadmap", "view", "user")
 #=> {:ok, [%{subject: "user:ada", excluded: []}, %{subject: "user:bob", excluded: []}], nil}
 ```
 
-`lookup_resources/5` lists what a subject can access, which is how you filter a list page. `lookup_subjects/5` lists who has access, which is how you build a sharing dialog.
+`lookup_resources/5` lists what a subject can access when the candidate set is the permission graph. For a SQL-backed list page, page the table first and filter with `check_bulk/3`; see [Phoenix](phoenix.md). `lookup_subjects/5` lists who has access, which is how you build a sharing dialog.
 
 ## Consistency tokens
 

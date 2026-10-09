@@ -7,6 +7,8 @@ defmodule BlogWeb.Router do
 
   scope "/", BlogWeb do
     pipe_through :api
+    get "/posts", PostController, :index
+    get "/posts/:id", PostController, :show
     post "/posts", PostController, :create
   end
 end

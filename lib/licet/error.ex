@@ -49,6 +49,7 @@ defmodule Licet.Error do
   | `:depth_exceeded` | Evaluation went deeper than `max_depth` hops. | Look for a very deep hierarchy, or raise the limit. |
   | `:cycle` | Evaluation revisited the same object and permission. | Check the data for a loop, such as a folder that is its own parent. |
   | `:lookup_too_large` | A lookup found more results than `max_lookup`. | Narrow the query, or check objects individually. |
+
   ### Consistency
 
   | Reason | Meaning | What to do |

@@ -21,6 +21,9 @@ Then open [localhost:4000](http://localhost:4000).
 - **Expected relations** failures use SpiceDB's wording.
   **Recompute expected relations** replaces the section with what Licet
   derives, like the SpiceDB playground's "Update" button.
+- **Explain a check** runs one `resource#permission@subject` through
+  `Licet.Validate.explain/2` and shows the evaluation trace. It re-runs when
+  you edit the file.
 - Caveats are rejected, as they are everywhere in Licet.
 
 The UI is built with [Corex](https://hexdocs.pm/corex). `mix test` covers the

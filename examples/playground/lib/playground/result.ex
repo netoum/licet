@@ -48,6 +48,26 @@ defmodule Playground.Result do
   @spec format_watches([watch()]) :: String.t()
   def format_watches(watches), do: Enum.map_join(watches, "\n", &format_watch/1)
 
+  @doc """
+  Formats an `Licet.Validate.explain/2` trace as indented text.
+  """
+  @spec format_trace(map()) :: String.t()
+  def format_trace(trace) when is_map(trace), do: format_trace(trace, 0)
+
+  defp format_trace(%{resource: resource, permission: permission, result: result} = trace, depth) do
+    indent = String.duplicate("  ", depth)
+    line = "#{indent}#{resource}##{permission}: #{result}"
+
+    case Map.get(trace, :children, []) do
+      [] ->
+        line
+
+      children ->
+        rest = Enum.map_join(children, "\n", &format_trace(&1, depth + 1))
+        line <> "\n" <> rest
+    end
+  end
+
   defp failures(yaml) do
     case Licet.Validate.run(yaml) do
       :ok -> {:ok, []}
