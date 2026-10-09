@@ -1,12 +1,23 @@
 defmodule Licet.Relationship do
   @moduledoc """
-  One relationship tuple.
+  A relationship: one stored fact linking a resource to a subject.
 
-  Text form follows SpiceDB: `document:roadmap#owner@user:anne`,
-  `document:roadmap#viewer@team:eng#member`, and
-  `document:roadmap#viewer@user:anne[expiration:2026-01-01T00:00:00Z]`.
-  A subject written `user:anne#...` is the same as `user:anne`.
-  Names stay strings. Licet never turns them into atoms.
+  Licet functions accept relationships as text, in SpiceDB's format, or as
+  this struct. `Licet.read/3` returns structs.
+
+  | Text | Meaning |
+  | --- | --- |
+  | `document:roadmap#owner@user:anne` | Anne is an owner of the roadmap |
+  | `document:roadmap#viewer@team:eng#member` | members of team eng are viewers |
+  | `document:roadmap#viewer@user:*` | every user is a viewer |
+  | `document:roadmap#viewer@user:anne[expiration:2027-01-01T00:00:00Z]` | Anne is a viewer until 2027 |
+
+  A subject written `user:anne#...` is the same as `user:anne`. In the struct,
+  `subject_relation` is `""` when the subject has no relation.
+
+  Type and relation names are lowercase, 3 to 64 characters. Ids are 1 to 1024
+  characters from `A-Z`, `a-z`, `0-9`, and `/_|=-+`, or `*` for a wildcard
+  subject. Names stay strings; Licet never turns them into atoms.
   """
 
   defstruct [
@@ -34,7 +45,26 @@ defmodule Licet.Relationship do
   @relation ~r/^[a-z][a-z0-9_]{1,62}[a-z0-9]$/
 
   @doc """
-  Parses a relationship string.
+  Parses relationship text.
+
+  This checks the format only. Whether the types and relations exist in the
+  schema is checked when the relationship is written.
+
+  ## Examples
+
+      iex> {:ok, rel} = Licet.Relationship.parse("document:1#viewer@team:eng#member")
+      iex> {rel.resource_type, rel.resource_id, rel.relation}
+      {"document", "1", "viewer"}
+      iex> {rel.subject_type, rel.subject_id, rel.subject_relation}
+      {"team", "eng", "member"}
+
+      iex> {:ok, rel} = Licet.Relationship.parse("document:1#viewer@user:ada[expiration:2027-01-01T00:00:00Z]")
+      iex> rel.expires_at
+      ~U[2027-01-01 00:00:00Z]
+
+      iex> {:error, %Licet.Error{reason: reason}} = Licet.Relationship.parse("document:1")
+      iex> reason
+      :invalid_relationship
   """
   @spec parse(String.t()) :: {:ok, t()} | {:error, Licet.Error.t()}
   def parse(value) when is_binary(value) do
@@ -70,7 +100,13 @@ defmodule Licet.Relationship do
   end
 
   @doc """
-  Renders a relationship in SpiceDB text form.
+  Renders a relationship as text, the inverse of `parse/1`.
+
+  ## Examples
+
+      iex> {:ok, rel} = Licet.Relationship.parse("document:1#viewer@team:eng#member")
+      iex> Licet.Relationship.to_string(rel)
+      "document:1#viewer@team:eng#member"
   """
   @spec to_string(t()) :: String.t()
   def to_string(%__MODULE__{} = rel) do
@@ -86,7 +122,18 @@ defmodule Licet.Relationship do
   end
 
   @doc """
-  Parses `document:1` or `team:eng#member`.
+  Parses an object, such as `"document:1"`, or a userset, such as
+  `"team:eng#member"`, into its type, id, and relation.
+
+  The relation is `""` for a plain object.
+
+  ## Examples
+
+      iex> Licet.Relationship.parse_object("document:1")
+      {:ok, "document", "1", ""}
+
+      iex> Licet.Relationship.parse_object("team:eng#member")
+      {:ok, "team", "eng", "member"}
   """
   @spec parse_object(String.t()) ::
           {:ok, String.t(), String.t(), String.t()} | {:error, Licet.Error.t()}

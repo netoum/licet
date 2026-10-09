@@ -148,6 +148,34 @@ defmodule LicetTest do
              ])
   end
 
+  test "a failed write in the caller's transaction returns its error and undoes only itself" do
+    name = start_licet!(@schema)
+    assert {:ok, _token} = Licet.write(name, [{:create, "document:5#owner@user:ada"}])
+
+    assert {:error, :grant, %Licet.Error{reason: :already_exists}, %{}} =
+             Ecto.Multi.new()
+             |> Licet.Multi.write(name, :grant, [{:create, "document:5#owner@user:ada"}])
+             |> Licet.TestRepo.transaction()
+
+    assert {:ok, :kept} =
+             Licet.TestRepo.transaction(fn ->
+               assert {:error, %Licet.Error{reason: :already_exists}} =
+                        Licet.write(name, [
+                          {:create, "document:6#owner@user:bob"},
+                          {:create, "document:5#owner@user:ada"}
+                        ])
+
+               assert {:ok, _token} = Licet.write(name, [{:create, "document:7#owner@user:bob"}])
+               :kept
+             end)
+
+    assert {:ok, :denied} =
+             Licet.check(name, "document:6", "view", "user:bob", consistency: :full)
+
+    assert {:ok, :allowed} =
+             Licet.check(name, "document:7", "view", "user:bob", consistency: :full)
+  end
+
   test "committed tokens, cache, and garbage collection survive outside the sandbox" do
     prefix = "g" <> Integer.to_string(System.os_time(:native))
 
@@ -279,6 +307,12 @@ defmodule LicetTest do
     assert {:error, %{reason: :invalid_relationship}} = Licet.write(name, [{:create, "nope"}])
     assert {:error, %{reason: :invalid_relationship}} = Licet.write(name, ["nope"])
     assert {:error, %{reason: :invalid_filter}} = Licet.write(name, [], preconditions: :nope)
+
+    too_many = List.duplicate({:must_match, %{resource_type: "document"}}, 1_001)
+
+    assert {:error, %{reason: :too_many_preconditions}} =
+             Licet.write(name, [], preconditions: too_many)
+
     {:ok, rel} = Licet.Relationship.parse("document:1#viewer@user:ada")
     assert {:error, %{reason: :unknown_type}} = Licet.write(name, [{:create, rel}])
   end

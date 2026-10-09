@@ -1,13 +1,15 @@
 defmodule Licet.Schema do
   @moduledoc """
-  Parses and compiles a `.zed` schema.
+  Parses schemas written in SpiceDB's schema language.
 
-  The supported subset is definitions, relations, permissions, the operators
-  `+`, `&`, `-` and `->`, the arrow functions `.any()` and `.all()`, `nil`,
-  wildcards, subject relations such as `team#member`, `use expiration`, and
-  `with expiration`. Operator precedence matches SpiceDB: `+` binds tightest,
-  then `&`, then `-`. Comments starting with `//` are ignored. Caveats and
-  `self` are rejected.
+  A running instance parses its schema itself, from the `:schema` option or
+  `Licet.write_schema/3`. Call `parse/1` directly to check a schema file, for
+  example in a test or before a deploy.
+
+  Licet supports definitions, relations, permissions, the operators `+`, `&`,
+  `-`, and `->`, the arrow functions `.any()` and `.all()`, `nil`, wildcards,
+  userset subjects such as `team#member`, and expiration. Caveats and `self`
+  are rejected. [Schema language](zed.md) is the full reference.
   """
 
   alias Licet.Schema.Parser
@@ -21,7 +23,31 @@ defmodule Licet.Schema do
         }
 
   @doc """
-  Parses schema source into a compiled schema.
+  Parses and validates schema text.
+
+  On success, returns a compiled schema. Its fields other than `:source` are
+  internal. On failure, returns an `:invalid_schema` error whose `details`
+  hold the `:line` and `:column` of the problem.
+
+  ## Examples
+
+      iex> {:ok, schema} =
+      ...>   Licet.Schema.parse(\"""
+      ...>   definition user {}
+      ...>
+      ...>   definition document {
+      ...>     relation owner: user
+      ...>     permission edit = owner
+      ...>   }
+      ...>   \""")
+      iex> schema.definitions |> Map.keys() |> Enum.sort()
+      ["document", "user"]
+
+      iex> {:error, error} = Licet.Schema.parse("definition document {\\n  permission edit = owner\\n}")
+      iex> error.reason
+      :invalid_schema
+      iex> error.details
+      %{line: 2, column: 21}
   """
   @spec parse(String.t()) :: {:ok, t()} | {:error, Licet.Error.t()}
   def parse(source) when is_binary(source) do
@@ -36,9 +62,16 @@ defmodule Licet.Schema do
   end
 
   @doc """
-  Renders a compiled schema back to `.zed` text.
+  Prints a compiled schema as text.
 
-  Comments are not preserved. The result parses to the same definitions.
+  The result parses to the same definitions. Comments and formatting from the
+  original text aren't preserved; definitions are sorted by name.
+
+  ## Examples
+
+      iex> {:ok, schema} = Licet.Schema.parse("definition user {}")
+      iex> Licet.Schema.to_zed(schema)
+      "definition user {\\n}"
   """
   @spec to_zed(t()) :: String.t()
   def to_zed(%{definitions: definitions, expiration: expiration}) do

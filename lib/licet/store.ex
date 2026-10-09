@@ -1,7 +1,6 @@
 defmodule Licet.Store do
-  @moduledoc """
-  Postgres storage for relationships, schema versions, and revision snapshots.
-  """
+  # Postgres storage for relationships, schema versions, and revision snapshots.
+  @moduledoc false
 
   alias Ecto.Adapters.SQL
   alias Licet.Error

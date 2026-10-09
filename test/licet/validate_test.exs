@@ -4,6 +4,8 @@ defmodule Licet.ValidateTest do
   alias Ecto.Adapters.SQL.Sandbox
   alias Ecto.Migration.Runner
 
+  doctest Licet.Validate
+
   setup do
     owner = Sandbox.start_owner!(Licet.TestRepo, shared: true)
     on_exit(fn -> Sandbox.stop_owner(owner) end)

@@ -1,0 +1,188 @@
+# Cheatsheet
+
+## Setup
+{: .col-2}
+
+### Migration
+
+```shell
+mix licet.gen.migration
+mix ecto.migrate
+```
+
+### Supervision tree
+
+```elixir
+{Licet,
+ name: MyApp.Licet,
+ repo: MyApp.Repo,
+ schema: {:file, Application.app_dir(:my_app, "priv/licet/schema.zed")}}
+```
+
+## Schema
+{: .col-2}
+
+### Definitions
+
+```zed
+definition user {}
+
+definition team {
+  relation member: user
+}
+
+definition document {
+  relation parent: folder
+  relation owner: user
+  relation viewer: user | user:* | team#member
+  permission edit = owner + parent->edit
+  permission view = viewer + edit
+}
+```
+
+### Operators
+
+| Syntax | Meaning |
+| --- | --- |
+| `a + b` | either grants |
+| `a & b` | both grant |
+| `a - b` | `a` grants and `b` doesn't |
+| `rel->perm` | `perm` on any object in `rel` |
+| `rel.any(perm)` | same as `rel->perm` |
+| `rel.all(perm)` | `perm` on every object in `rel` |
+| `nil` | nothing |
+| `user:*` | every user |
+| `team#member` | members of a team |
+
+Precedence, tightest first: arrows, `+`, `&`, `-`.
+
+### Expiration
+
+```zed
+use expiration
+
+definition document {
+  relation viewer: user with expiration
+}
+```
+
+## Relationships
+{: .col-2}
+
+### Text form
+
+| Text | Meaning |
+| --- | --- |
+| `document:1#owner@user:ada` | Ada owns document 1 |
+| `document:1#viewer@team:eng#member` | team eng's members view it |
+| `document:1#viewer@user:*` | every user views it |
+| `document:1#viewer@user:bob[expiration:2027-01-01T00:00:00Z]` | until 2027 |
+
+### Writes
+
+```elixir
+{:ok, token} =
+  Licet.write(MyApp.Licet, [
+    {:create, "document:1#owner@user:ada"},
+    {:touch, "document:1#viewer@user:bob"},
+    {:delete, "document:1#viewer@user:cara"}
+  ])
+```
+
+`:create` fails if the relationship exists. `:touch` creates or updates it. `:delete` removes it.
+
+### Delete by filter
+
+```elixir
+Licet.delete(MyApp.Licet, %{resource_type: "document", resource_id: "1"})
+```
+
+### Read
+
+```elixir
+{:ok, relationships} =
+  Licet.read(MyApp.Licet, %{resource_type: "document", resource_id: "1"})
+```
+
+## Queries
+{: .col-2}
+
+### Check
+
+```elixir
+Licet.check(MyApp.Licet, "document:1", "view", "user:ada")
+#=> {:ok, :allowed}
+```
+
+### Bulk check
+
+```elixir
+Licet.check_bulk(MyApp.Licet, [
+  %{resource: "document:1", permission: "view", subject: "user:ada"},
+  %{resource: "document:2", permission: "view", subject: "user:ada"}
+])
+#=> {:ok, [{:ok, :allowed}, {:ok, :denied}]}
+```
+
+### Lookup resources
+
+```elixir
+{:ok, ids, cursor} =
+  Licet.lookup_resources(MyApp.Licet, "document", "view", "user:ada", limit: 100)
+```
+
+### Lookup subjects
+
+```elixir
+{:ok, subjects, cursor} =
+  Licet.lookup_subjects(MyApp.Licet, "document:1", "view", "user")
+#=> [%{subject: "user:*", excluded: ["user:dan"]}, ...]
+```
+
+### Explain
+
+```elixir
+{:ok, :allowed, trace} = Licet.explain(MyApp.Licet, "document:1", "view", "user:ada")
+```
+
+## Consistency
+{: .col-2}
+
+### Modes
+
+| Option | Sees |
+| --- | --- |
+| `:minimize_latency` | a shared snapshot, cached (default) |
+| `{:at_least, token}` | at least the write behind `token` |
+| `{:exact, token}` | exactly the snapshot of `token` |
+| `:full` | the latest committed data, uncached |
+
+### Usage
+
+```elixir
+Licet.check(MyApp.Licet, "document:1", "view", "user:ada",
+  consistency: {:at_least, token}
+)
+```
+
+## Errors
+{: .col-2}
+
+### Shape
+
+```elixir
+{:error, %Licet.Error{reason: :unknown_relation, message: message}}
+```
+
+### Common reasons
+
+| Reason | Cause |
+| --- | --- |
+| `:invalid_relationship` | malformed tuple text |
+| `:unknown_type` | type not in the schema |
+| `:unknown_relation` | relation or permission not in the schema |
+| `:already_exists` | `:create` of an existing tuple |
+| `:timeout` | the check took longer than `:timeout` |
+| `:unsafe_schema_change` | stored tuples would be stranded |
+
+See `Licet.Error` for the full list.

@@ -1,14 +1,18 @@
 defmodule Mix.Tasks.Licet.Validate do
   @moduledoc """
-  Checks a SpiceDB validation file against Licet: its assertions and its
-  expected relations. See `Licet.Validate`.
+  Runs a SpiceDB validation file: its assertions and expected relations.
 
-      mix licet.validate test/conformance/document.yaml
+      $ mix licet.validate test/permissions/documents.yaml
+      licet validation passed
+
+  The task exits with an error and lists every failure when the file doesn't
+  pass, so it can run in CI. It needs no database. See `Licet.Validate` for the
+  file format and [Testing](testing.md) for an example.
   """
 
   use Mix.Task
 
-  @shortdoc "Validates a .zed schema and assertions"
+  @shortdoc "Runs a SpiceDB validation file"
 
   @impl Mix.Task
   def run([path]) do

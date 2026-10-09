@@ -1,14 +1,13 @@
 defmodule Licet.Engine.Subjects do
-  @moduledoc """
-  Subject-set algebra for `lookup_subjects`, the same as SpiceDB's subject sets
-  without caveats.
-
-  Subjects are grouped by `{type, relation}`, with `""` for no relation, so
-  usersets such as `team:eng#member` are subjects too. Within a group a
-  wildcard means every id except its excluded ones, and concrete ids are kept
-  next to it: a union of `user:*` and `user:tom` holds both, and removing
-  `user:dan` from `user:*` records `user:dan` as excluded.
-  """
+  # Subject-set algebra for `lookup_subjects`, the same as SpiceDB's subject sets
+  # without caveats.
+  #
+  # Subjects are grouped by `{type, relation}`, with `""` for no relation, so
+  # usersets such as `team:eng#member` are subjects too. Within a group a
+  # wildcard means every id except its excluded ones, and concrete ids are kept
+  # next to it: a union of `user:*` and `user:tom` holds both, and removing
+  # `user:dan` from `user:*` records `user:dan` as excluded.
+  @moduledoc false
 
   defstruct sets: %{}
 

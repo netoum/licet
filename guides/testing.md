@@ -1,70 +1,126 @@
 # Testing
 
-`Licet.Testing.migrate!/2` creates the tables for one prefix. Use a distinct prefix per test so sandboxed tests do not see each other.
+Licet stores everything in Postgres, so it works with the `Ecto.Adapters.SQL.Sandbox` you already use in tests. This guide shows two approaches, testing your application with a real instance and testing your permission model on its own.
+
+## Using your application's instance
+
+The simplest setup uses the instance your application already starts. Run the Licet migration in the test database like any other migration, and the sandbox isolates each test's writes:
 
 ```elixir
-setup do
-  prefix = "t" <> Integer.to_string(System.unique_integer([:positive]))
-  Licet.Testing.migrate!(MyApp.Repo, prefix)
-  name = Module.concat(MyApp.LicetTest, "I" <> Integer.to_string(System.unique_integer([:positive])))
+test "owners can edit their documents", %{user: user} do
+  {:ok, document} = MyApp.Documents.create(user, %{title: "Plan"})
 
-  start_supervised!({Licet, name: name, repo: MyApp.Repo, prefix: prefix, schema: {:string, schema}, gc_interval: false})
-
-  %{licet: name}
+  assert {:ok, :allowed} =
+           Licet.check(MyApp.Licet, "document:#{document.id}", "edit", "user:#{user.id}")
 end
 ```
 
-With `Ecto.Adapters.SQL.Sandbox` in shared mode, checks on the test process see writes from that test. Set `gc_interval: false` so the collector does not run during the test.
+The check sees the test's uncommitted writes because, under the sandbox, the test runs inside a transaction. Start the instance with `gc_interval: false` in the test environment, so the garbage collector doesn't run during tests.
 
-`Licet.Testing.allow/3` lets a child process use the owner's sandbox connection. Parallel checks call the same sandbox allow helper.
+## One instance per test
 
-## Validation files
+For `async: true` tests that change the schema, or for testing a library built on Licet, start a separate instance per test with its own table prefix. `Licet.Testing.migrate!/2` creates the tables for a prefix:
 
-`mix licet.validate test/conformance/document.yaml` runs a SpiceDB validation file against the in-memory engine. It is the YAML that [play.authzed.com](https://play.authzed.com) exports and `zed validate` reads: `schema`, `relationships`, `assertions` (`assertTrue`, `assertFalse`), and `validation`.
+```elixir
+setup do
+  prefix = "t#{System.unique_integer([:positive])}"
+  Licet.Testing.migrate!(MyApp.Repo, prefix)
 
-`validation` lists, for each `resource#permission`, every subject and the relations that hold it:
+  name = Module.concat(MyApp.LicetTest, prefix)
+
+  start_supervised!(
+    {Licet,
+     name: name,
+     repo: MyApp.Repo,
+     prefix: prefix,
+     schema: {:file, "priv/licet/schema.zed"},
+     gc_interval: false}
+  )
+
+  %{licet: name}
+end
+
+test "viewers can view", %{licet: licet} do
+  {:ok, _token} = Licet.write(licet, [{:create, "document:1#viewer@user:ada"}])
+  assert {:ok, :allowed} = Licet.check(licet, "document:1", "view", "user:ada")
+end
+```
+
+The tables are created inside the test's sandbox transaction, so they disappear when the test ends.
+
+## Processes and the sandbox
+
+Licet can evaluate the branches of an arrow in parallel, in separate processes. They need access to the test's sandbox connection, which Licet grants through `Licet.Testing.allow/3` automatically. Use the same function when your own code calls Licet from a process the test spawned:
+
+```elixir
+test_pid = self()
+
+Task.async(fn ->
+  Licet.Testing.allow(MyApp.Repo, test_pid, self())
+  Licet.check(MyApp.Licet, "document:1", "view", "user:ada")
+end)
+```
+
+With the sandbox in shared mode, `Ecto.Adapters.SQL.Sandbox.mode(MyApp.Repo, {:shared, self()})`, no allowance is needed.
+
+## Testing the permission model
+
+A permission model deserves its own tests, independent of the rest of the application. Licet runs SpiceDB validation files, the YAML that the [SpiceDB playground](https://play.authzed.com) exports and `zed validate` reads:
 
 ```yaml
+schema: |-
+  definition user {}
+
+  definition document {
+    relation owner: user
+    relation viewer: user | user:*
+    permission view = owner + viewer
+  }
+
+relationships: |-
+  document:roadmap#owner@user:ada
+  document:roadmap#viewer@user:bob
+
+assertions:
+  assertTrue:
+    - "document:roadmap#view@user:ada"
+    - "document:roadmap#view@user:bob"
+  assertFalse:
+    - "document:roadmap#view@user:cara"
+
 validation:
-  document:somedoc#view:
-    - "[user:* - {user:jimmy}] is <document:somedoc#viewer>"
-    - "[user:tom] is <document:somedoc#viewer>/<document:somedoc#writer>"
+  document:roadmap#view:
+    - "[user:ada] is <document:roadmap#owner>"
+    - "[user:bob] is <document:roadmap#viewer>"
 ```
 
-Licet builds the same set as SpiceDB's developer membership set: a recursive expand in which usersets are subjects too, and a wildcard keeps its exclusions next to concrete ids. Failures use SpiceDB's messages, for example ``For object and permission/relation `document:somedoc#view`, missing expected subject `user:jake` ``. `Licet.Validate.expected_relations/1` regenerates the section byte for byte as the playground writes it.
+* `assertions` lists checks that must be allowed (`assertTrue`) or denied (`assertFalse`).
+* `validation` lists, for each `resource#permission`, every subject that has it and the relations that grant it. A wildcard is written with its exclusions, as in `[user:* - {user:dan}]`.
 
-`examples/playground` is a local Phoenix app for editing a validation file in the browser. It checks the file with `Licet.Validate` on every change, imports and exports playground YAML, and recomputes expected relations. Run it with `mix setup && mix phx.server`. It needs no database.
-
-## SpiceDB conformance
-
-`test/conformance/spicedb/` vendors SpiceDB's consistency corpus (`internal/services/integrationtesting/testconfigs`) under its Apache-2.0 license. The commit is recorded in that directory's `LICENSE`. Every file is either run or skipped with the exact schema error it must produce. Today that means files using caveats and `use self`. No file is special-cased.
-
-Each runnable file runs three ways:
-
-- `Licet.Validate.run_file/1`: assertions and expected relations.
-- `Licet.Conformance.run/1`, a port of SpiceDB's `consistencytestutil` suite on the in-memory reader. It checks every definition, object id, relation, and defined subject, then requires `lookup_resources` to return exactly the accessible set, `lookup_subjects` to contain the accessible subjects of each subject type and only subjects that check, every subject an expand reaches to check, and every assertion to agree with `lookup_resources`.
-- Through Postgres: the schema and relationships go through `Licet.write/3`, then every assertion is checked at `consistency: :full` with `check/5`, `check_bulk/3`, and `lookup_resources/5`.
-
-`test/licet/expected_relations_test.exs` ports the expected-relations fixtures from SpiceDB's `pkg/development/wasm/operations_test.go`.
-
-## New Enemy
-
-`test/licet/new_enemy_test.exs` is the token test from SpiceDB's `e2e/newenemy`, run on Postgres. With `permission allowed = direct - excluded`, it writes the exclusion, then the grant, and keeps both tokens. A check `{:exact, token}` at either token must deny. After the exclusion is deleted, the old tokens still deny and the newer token allows. Tokens carry the Postgres snapshot of the write, so a revision never shows the grant without the exclusion that came before it.
-
-## SpiceDB differential
-
-The tests tagged `:spicedb` run Licet and a live SpiceDB side by side, through SpiceDB's HTTP API. They are excluded by default.
-
-- `test/licet/spicedb_live_corpus_test.exs` loads every runnable corpus file into both. It then asks every check over the file's definitions, object ids, and subjects, every LookupResources, and every LookupSubjects for each subject type the file writes, including wildcard exclusions. Any difference fails, whether or not the corpus has an assertion for it.
-- `test/licet/validate_test.exs` compares generated check cases. The default count is 100, and CI sets `LICET_DIFFERENTIAL_CASES=10000`.
-
-Start SpiceDB, then run the tagged tests:
+Run a file from the command line, for example in CI:
 
 ```shell
-docker run --rm -p 8443:8443 authzed/spicedb:latest \
-  serve --datastore-engine memory --http-enabled --grpc-preshared-key test
-
-LICET_SPICEDB=1 mix test --only spicedb --include spicedb
+mix licet.validate test/permissions/documents.yaml
 ```
 
-The [release binary](https://github.com/authzed/spicedb/releases) takes the same `serve` arguments if Docker is not available. `LICET_SPICEDB_URL` points the tests at another server. CI runs both suites against `authzed/spicedb:latest`.
+Or from ExUnit:
+
+```elixir
+test "document permissions" do
+  assert :ok = Licet.Validate.run_file("test/permissions/documents.yaml")
+end
+```
+
+Failures use the same messages as SpiceDB. The file runs in memory and doesn't need a database.
+
+Writing the `validation` section by hand is tedious. `Licet.Validate.expected_relations/1` computes it from the schema and relationships, in the same format the playground writes, so you can review it once and commit it.
+
+## A playground
+
+The repository includes `examples/playground`, a small Phoenix app for editing a validation file in the browser. It checks the file as you type, imports and exports playground YAML, and recomputes the expected relations. It needs no database:
+
+```shell
+cd examples/playground
+mix setup
+mix phx.server
+```

@@ -1,32 +1,38 @@
 # Changelog
 
-## Unreleased
+All notable changes to Licet are recorded here. Licet follows [Semantic Versioning](https://semver.org). Until 0.1, any release may change the public API.
 
-* Accept `.any()`, `.all()`, and `nil`.
-* Bind `+` tighter than `&`, and `&` tighter than `-`, as SpiceDB does. Before, `&` and `-` had the same precedence, so `a - b & c` parsed as `(a - b) & c`.
-* A userset subject is a member of itself: `document:1#viewer@document:1#viewer` is allowed.
-* Accept the `#...` subject suffix as no relation.
-* Arrows follow a tupleset row's subject object and ignore its subject relation, as SpiceDB does. Before, rows with a subject relation were skipped.
-* An arrow's right-hand name only needs to exist on one subject type. Types without it contribute nothing.
-* Checks walk usersets even when the subject is a userset.
-* Fix a stale cache hit under `{:exact, token}`. The check cache was keyed on the snapshot text alone. A write's recorded snapshot can match an autocommit snapshot taken just before the write, so a token could return a result cached before its own write. Keys now carry the whole revision: snapshot, own xid, and time. Found by the New Enemy test.
-* Parallel branches stop through a shared cancel flag instead of being killed mid-query, so a short-circuited check no longer makes Postgrex drop a connection.
-* `Licet.Validate` reads the `validation` section, reports SpiceDB's messages, and regenerates it with `expected_relations/1`. Malformed validation files return `:invalid_validation_file`.
-* The schema parser reports `unexpected character X` and names caveats and `use self` as unsupported.
-* **Breaking:** `lookup_subjects/5` takes a subject type, as SpiceDB's LookupSubjects does: `Licet.lookup_subjects(name, "document:1", "view", "user")`, or `"team#member"` for a userset type. Results are maps such as `%{subject: "user:*", excluded: ["user:dan"]}`. Before, `lookup_subjects/4` returned strings of every type, dropped a wildcard's exclusions, and hid concrete subjects behind a wildcard.
-* `lookup_subjects` follows SpiceDB's subject sets: concrete subjects are listed next to a wildcard, removing a subject from a wildcard records it as excluded, and a userset counts as a member of itself.
-* Run SpiceDB's consistency corpus on the in-memory reader and on Postgres.
-* Compare every corpus file with a live SpiceDB in CI: every check, LookupResources, and LookupSubjects over the file's objects and subjects.
-* Add `examples/playground`, a local Phoenix app that edits a validation file and checks it with `Licet.Validate` as you type.
+## 0.0.1 (unreleased)
 
-## 1.0.0 - 2026-10-08
+The first public version.
 
-First release.
+### Schema language
 
-* Parse and evaluate a SpiceDB `.zed` subset: definitions, relations, permissions, unions, intersections, exclusions, arrows, wildcards, usersets, and expiration.
-* Store tuples, schemas, and snapshots in Postgres 15+ with xid8 visibility, read-your-writes inside a transaction, and Ecto sandbox support.
-* Check, bulk check, lookup resources, lookup subjects, and explain, with depth and timeout limits.
-* Consistency tokens (`:minimize_latency`, `:at_least`, `:exact`, `:full`), an ETS cache, and in-flight deduplication.
-* Reject schema changes that would strand living tuples.
-* Garbage-collect tombstones and expired tuples under an advisory lock.
-* `mix licet.gen.migration`, `mix licet.validate`, `Licet.Multi`, and `Licet.Testing`.
+* Parse SpiceDB's `.zed` schema language: definitions, relations, and permissions built from union (`+`), intersection (`&`), exclusion (`-`), and arrows (`->`).
+* Arrow functions `.any()` and `.all()`, the empty set `nil`, wildcards such as `user:*`, and userset subjects such as `team#member`.
+* Relationships that expire, with `use expiration` and `with expiration`.
+* Operator precedence and arrow resolution match SpiceDB.
+* Errors report a line and column. Caveats and `self` are rejected with a clear message.
+
+### Storage and consistency
+
+* Relationships, schema versions, and snapshots live in three tables in your own Postgres 15+ database, under a prefix you choose.
+* Writes join the caller's `Repo.transaction/2`. A check in the same transaction sees the uncommitted write, and a rollback discards it. A failed write is undone back to a savepoint and returned as an error, so the caller, or `Ecto.Multi`, decides what happens to the transaction.
+* Every write returns a consistency token. Checks accept four consistency modes: `:minimize_latency`, `{:at_least, token}`, `{:exact, token}`, and `:full`.
+* Schema changes that would strand stored relationships are rejected.
+* Garbage collection removes old history behind a Postgres advisory lock, so only one node collects at a time.
+
+### Queries
+
+* `check/5` and `check_bulk/3`, with a shared cache per snapshot and deduplication of identical checks in flight.
+* `lookup_resources/5` and `lookup_subjects/5`, paginated with cursors. `lookup_subjects/5` reports which subjects a wildcard excludes.
+* `explain/5` returns the trace of a check.
+* Depth, time, and result-size limits on every query.
+
+### Tooling
+
+* `Licet.Multi` adds a write to an `Ecto.Multi`.
+* `Licet.Testing` creates tables per test prefix and shares the Ecto sandbox with parallel checks.
+* `mix licet.gen.migration` generates the install migration.
+* `mix licet.validate` runs a SpiceDB validation file, the YAML that the SpiceDB playground exports, including its expected relations.
+* Telemetry events for checks, lookups, writes, and the cache.

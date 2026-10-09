@@ -28,7 +28,7 @@ The read path never calls `pg_current_xact_id()`. It uses `pg_current_xact_id_if
 
 ## Tokens and consistency
 
-A token is `v1.` plus URL-safe base64 JSON: version, xid, snapshot text, and timestamp. Decode checks the shapes (`xid` is 1–20 digits, snapshot matches `xmin:xmax:xip`) and does not decode Erlang terms.
+A token is `v1.` plus URL-safe base64 JSON: version, xid, snapshot text, and timestamp. The `v1.` prefix is the token format version, not the package version; pagination cursors use the same prefix for the same reason. Decode checks the shapes (`xid` is 1–20 digits, snapshot matches `xmin:xmax:xip`) and does not decode Erlang terms.
 
 `:exact` loads the stored snapshot for that xid after `pg_xact_status` says the transaction committed. The same connection may read an in-progress xid. An aborted xid is rejected. A committed xid with no `transactions` row is outside the cleanup window.
 

@@ -1,15 +1,29 @@
 defmodule Licet.Migration do
   @moduledoc """
-  Versioned Postgres migrations for a Licet prefix.
+  Creates and drops Licet's tables.
 
-  The generated Ecto migration calls `up/1` and `down/1`. Tests and
-  `Licet.Testing` can run `statements/1` directly.
+  `mix licet.gen.migration` generates an Ecto migration that calls this module:
+
+      defmodule Licet.Repo.Migrations.InstallLicet do
+        use Ecto.Migration
+
+        def up, do: Licet.Migration.up(prefix: "licet")
+
+        def down, do: Licet.Migration.down(prefix: "licet")
+      end
+
+  The tables live in their own Postgres schema, named by `:prefix`. The
+  statements use `IF NOT EXISTS`, so running `up/1` twice is harmless. In tests,
+  `Licet.Testing.migrate!/2` runs the same statements without a migration.
   """
 
   @prefix ~r/^[a-z_][a-z0-9_]{0,62}$/
 
   @doc """
-  SQL statements that create the Licet tables in `prefix`.
+  Returns the SQL statements that create the tables in a prefix.
+
+  Takes a prefix string or a keyword list with `:prefix`, which defaults to
+  `"licet"`.
   """
   @spec statements(String.t() | keyword()) :: [String.t()]
   def statements(prefix) when is_binary(prefix), do: statements(prefix: prefix)
@@ -70,7 +84,11 @@ defmodule Licet.Migration do
   end
 
   @doc """
-  Runs `statements/1` inside an Ecto migration.
+  Creates the tables. Call it from an Ecto migration's `up/0`.
+
+  ## Options
+
+    * `:prefix` - the Postgres schema for the tables. Defaults to `"licet"`.
   """
   @spec up(keyword()) :: :ok
   def up(opts \\ []) do
@@ -78,7 +96,12 @@ defmodule Licet.Migration do
   end
 
   @doc """
-  Drops the Licet schema.
+  Drops the prefix's Postgres schema and every table in it. Call it from an
+  Ecto migration's `down/0`.
+
+  ## Options
+
+    * `:prefix` - the Postgres schema to drop. Defaults to `"licet"`.
   """
   @spec down(keyword()) :: :ok
   def down(opts \\ []) do
@@ -87,7 +110,14 @@ defmodule Licet.Migration do
   end
 
   @doc """
-  Source of an Ecto migration module.
+  Returns the source of an Ecto migration module, as written by
+  `mix licet.gen.migration`.
+
+  ## Options
+
+    * `:prefix` - the Postgres schema for the tables. Defaults to `"licet"`.
+    * `:module` - the migration module name. Defaults to
+      `"Licet.Repo.Migrations.InstallLicet"`.
   """
   @spec migration_source(keyword()) :: String.t()
   def migration_source(opts) do

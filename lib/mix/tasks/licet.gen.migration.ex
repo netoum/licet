@@ -1,8 +1,20 @@
 defmodule Mix.Tasks.Licet.Gen.Migration do
   @moduledoc """
-  Generates an Ecto migration that installs Licet tables.
+  Generates the Ecto migration that creates Licet's tables.
 
-      mix licet.gen.migration --prefix licet --path priv/repo/migrations/install_licet.exs
+      $ mix licet.gen.migration
+      $ mix ecto.migrate
+
+  The migration calls `Licet.Migration.up/1` and `Licet.Migration.down/1`.
+
+  ## Options
+
+    * `--prefix` - the Postgres schema for the tables. Defaults to `licet`, which
+      is also the default `:prefix` of an instance.
+    * `--path` - where to write the file. Defaults to
+      `priv/repo/migrations/<timestamp>_install_licet.exs`.
+    * `--module` - the migration module name. Defaults to a name derived from
+      the file name.
   """
 
   use Mix.Task

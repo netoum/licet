@@ -5,6 +5,9 @@ defmodule Licet.SchemaTest do
 
   alias Licet.Schema.Diff
 
+  doctest Licet.Schema
+  doctest Licet.Relationship
+
   @sample """
   use expiration
   // comment

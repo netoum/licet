@@ -1,6 +1,11 @@
 defmodule Licet.Validate do
   @moduledoc """
-  Runs a SpiceDB validation file against the Licet engine.
+  Tests a permission model with a SpiceDB validation file.
+
+  A validation file bundles a schema, some relationships, and the answers you
+  expect. Running it tells you whether the model behaves as intended, without a
+  database. Use it in your test suite, or from the command line with
+  `mix licet.validate`. [Testing](testing.md) shows a complete example.
 
   The file is the YAML that [play.authzed.com](https://play.authzed.com) exports
   and `zed validate` reads:
@@ -46,7 +51,13 @@ defmodule Licet.Validate do
   @check_opts [timeout: 5_000, parallel: nil]
 
   @doc """
-  Validates the YAML file at `path`.
+  Reads the file at `path` and runs it with `run/1`.
+
+  ## Examples
+
+      test "document permissions" do
+        assert :ok = Licet.Validate.run_file("test/permissions/documents.yaml")
+      end
   """
   @spec run_file(Path.t()) :: :ok | {:error, Error.t() | [failure()]}
   def run_file(path) when is_binary(path) do
@@ -60,7 +71,31 @@ defmodule Licet.Validate do
   end
 
   @doc """
-  Validates YAML text: every assertion, then every expected relation.
+  Runs validation YAML: every assertion, then every expected relation.
+
+  Returns `:ok`, a list of failures, or an error when the file itself is
+  invalid. An assertion failure is a map with the `:assertion`, the
+  `:expected` answer, and the answer it `:got`. An expected-relations failure
+  has the `:relation` and SpiceDB's `:message`.
+
+  ## Examples
+
+      iex> Licet.Validate.run(\"""
+      ...> schema: |-
+      ...>   definition user {}
+      ...>   definition document {
+      ...>     relation viewer: user
+      ...>     permission view = viewer
+      ...>   }
+      ...> relationships: |-
+      ...>   document:1#viewer@user:ada
+      ...> assertions:
+      ...>   assertTrue:
+      ...>     - document:1#view@user:ada
+      ...>   assertFalse:
+      ...>     - document:1#view@user:ada
+      ...> \""")
+      {:error, [%{assertion: "document:1#view@user:ada", expected: :denied, got: {:ok, :allowed}}]}
   """
   @spec run(String.t()) :: :ok | {:error, Error.t() | [failure()]}
   def run(source) when is_binary(source) do
@@ -73,7 +108,21 @@ defmodule Licet.Validate do
   end
 
   @doc """
-  Parses YAML text into a schema, relationships, assertions, and expected relations.
+  Parses validation YAML without running it.
+
+  ## Examples
+
+      iex> {:ok, file} =
+      ...>   Licet.Validate.parse(\"""
+      ...>   schema: "definition user {}"
+      ...>   assertions:
+      ...>     assertFalse:
+      ...>       - user:ada#member@user:bob
+      ...>   \""")
+      iex> file.assert_false
+      ["user:ada#member@user:bob"]
+      iex> file.relationships
+      []
   """
   @spec parse(String.t()) :: {:ok, t()} | {:error, Error.t()}
   def parse(source) when is_binary(source) do
@@ -94,8 +143,28 @@ defmodule Licet.Validate do
   end
 
   @doc """
-  Recomputes the `validation` section for the keys it already lists, in the
-  same YAML that SpiceDB's playground writes when it updates expected relations.
+  Computes the `validation` section from the schema and relationships.
+
+  For each `resource#permission` key the file already lists, the result lists
+  every subject and the relations that grant it, in the same YAML that the
+  SpiceDB playground writes when it updates expected relations. Review the
+  output once, then commit it to the file.
+
+  ## Examples
+
+      iex> Licet.Validate.expected_relations(\"""
+      ...> schema: |-
+      ...>   definition user {}
+      ...>   definition document {
+      ...>     relation viewer: user
+      ...>     permission view = viewer
+      ...>   }
+      ...> relationships: |-
+      ...>   document:1#viewer@user:ada
+      ...> validation:
+      ...>   document:1#view: []
+      ...> \""")
+      {:ok, "document:1#view:\\n    - '[user:ada] is <document:1#viewer>'\\n"}
   """
   @spec expected_relations(String.t()) :: {:ok, String.t()} | {:error, Error.t()}
   def expected_relations(source) when is_binary(source) do

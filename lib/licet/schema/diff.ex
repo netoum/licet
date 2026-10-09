@@ -1,7 +1,6 @@
 defmodule Licet.Schema.Diff do
-  @moduledoc """
-  Compares two compiled schemas and reports changes that can strand data.
-  """
+  # Compares two compiled schemas and reports changes that can strand data.
+  @moduledoc false
 
   @type change :: %{
           removed_definitions: [String.t()],

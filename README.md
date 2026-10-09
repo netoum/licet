@@ -1,24 +1,57 @@
 # Licet
 
-Relationship-based authorization for Elixir, stored in your Postgres database.
+Fine-grained authorization for Elixir, in your own Postgres database.
 
-Licet evaluates a [SpiceDB](https://authzed.com/docs/spicedb) `.zed` subset in your application and keeps the tuples next to your other data. A write inside `Repo.transaction/2` is visible to a check in that same transaction, and it disappears if the transaction rolls back.
+Licet answers questions like "can Ada edit this document?" from relationships you store: Ada owns the folder, the folder contains the document, owners of a folder can edit what's in it. This model is relationship-based access control (ReBAC), the approach described in Google's [Zanzibar paper](https://research.google/pubs/zanzibar-googles-consistent-global-authorization-system/). Licet uses the schema language of [SpiceDB](https://authzed.com/docs/spicedb), the best-known open-source Zanzibar implementation, and evaluates it inside your application, with the relationships stored next to the rest of your data.
 
-## Install
+> Licet is pre-release (0.0.x). The API may change before 0.1. See the [changelog](CHANGELOG.md).
+
+## Why Licet
+
+* **No extra service.** Relationships live in your Postgres database, in tables created by an ordinary Ecto migration. There is nothing else to deploy or monitor.
+* **Transactional.** A write joins your `Repo.transaction/2`. A check in the same transaction already sees it, and a rollback discards it together with the rest of your data. Granting the owner of a new record can never fail independently of creating the record.
+* **Consistent when it matters.** Every write returns a token. Pass it to a later check to guarantee that check sees the write, even on another node. Use the cached default for everything else.
+* **SpiceDB's language and behavior.** Schemas are SpiceDB `.zed` files, and Licet's answers are tested against a running SpiceDB on SpiceDB's own test suite. You can start embedded and move to SpiceDB later with the same schema.
+
+## A two-minute example
+
+Add the dependency. Licet isn't published to Hex yet:
 
 ```elixir
 def deps do
   [
-    {:licet, "~> 1.0"}
+    {:licet, github: "netoum/licet"}
   ]
 end
 ```
 
-Licet requires Elixir 1.17 or newer and Postgres 15 or newer.
+Licet needs Elixir 1.17 or newer and Postgres 15 or newer.
 
-## Start
+Describe your permissions in `priv/licet/schema.zed`:
 
-Generate a migration, then start an instance beside your repo:
+```zed
+definition user {}
+
+definition team {
+  relation member: user
+}
+
+definition document {
+  relation owner: user
+  relation viewer: user | team#member
+  permission edit = owner
+  permission view = owner + viewer
+}
+```
+
+Generate the migration that creates Licet's tables, then run it:
+
+```shell
+mix licet.gen.migration
+mix ecto.migrate
+```
+
+Start Licet in your supervision tree, after your repo:
 
 ```elixir
 children = [
@@ -26,64 +59,67 @@ children = [
   {Licet,
    name: MyApp.Licet,
    repo: MyApp.Repo,
-   prefix: "licet",
-   schema: {:file, "priv/licet/schema.zed"}}
+   schema: {:file, Application.app_dir(:my_app, "priv/licet/schema.zed")}}
 ]
 ```
 
-```shell
-mix licet.gen.migration --prefix licet
-```
-
-```zed
-definition user {}
-
-definition document {
-  relation owner: user
-  relation viewer: user | user:*
-  permission view = owner + viewer
-}
-```
+Write relationships and check permissions:
 
 ```elixir
-{:ok, _token} = Licet.write(MyApp.Licet, [{:create, "document:1#owner@user:ada"}])
-{:ok, :allowed} = Licet.check(MyApp.Licet, "document:1", "view", "user:ada")
+{:ok, token} =
+  Licet.write(MyApp.Licet, [
+    {:create, "document:roadmap#owner@user:ada"},
+    {:create, "team:eng#member@user:bob"},
+    {:create, "document:roadmap#viewer@team:eng#member"}
+  ])
+
+opts = [consistency: {:at_least, token}]
+
+Licet.check(MyApp.Licet, "document:roadmap", "view", "user:bob", opts)
+#=> {:ok, :allowed}
+
+Licet.check(MyApp.Licet, "document:roadmap", "edit", "user:bob", opts)
+#=> {:ok, :denied}
+
+Licet.lookup_resources(MyApp.Licet, "document", "view", "user:bob", opts)
+#=> {:ok, ["roadmap"], nil}
 ```
 
-## What v1 includes
+By default a check reads a snapshot that is refreshed every few seconds and shared through a cache. Passing the token from a write guarantees the check sees that write. [Consistency](guides/consistency.md) explains the trade-off.
 
-- Definitions, relations, permissions, `+`, `&`, `-`, `->`, `.any()`, `.all()`, `nil`, wildcards, and `team#member`
-- `use expiration` and `with expiration`
-- `check`, `check_bulk`, `lookup_resources`, `lookup_subjects`, and `explain`
-- Zed tokens and four consistency modes: `:minimize_latency`, `{:at_least, token}`, `{:exact, token}`, `:full`
-- An ETS cache, in-flight deduplication, and optional parallel arrow checks
-- Schema diffing that rejects changes that would strand living tuples
-- Garbage collection behind a Postgres advisory lock
-- `Licet.Multi`, `Licet.Testing`, and `mix licet.validate`
+[Getting started](guides/getting-started.md) walks through the same steps in more detail.
 
-Caveats, `self`, Watch, and a networked service are intentionally out of v1. See the [upgrade guide](guides/upgrade.md).
+## Features
+
+* The SpiceDB schema language: union, intersection, exclusion, arrows (including `.any()` and `.all()`), wildcards such as "every user", nested groups through usersets, and relationships that expire.
+* Checks one at a time or in bulk, with a cache per snapshot and deduplication of identical checks in flight.
+* Lookups in both directions: every document a user can view, or every user who can view a document. Results are paginated.
+* `explain/5`, which shows why a check was allowed or denied.
+* Four consistency modes, from the cached default to always-fresh.
+* Schema changes are checked against stored relationships, so a deploy can't silently revoke access.
+* Test helpers for the Ecto sandbox, and `mix licet.validate` for SpiceDB validation files.
+* Telemetry events for checks, lookups, writes, and the cache.
+
+## When to use something else
+
+* **Several services need the same permissions**, or you need caveats or a stream of changes: run [SpiceDB](https://authzed.com/docs/spicedb) and call it with the [`authzed`](https://hex.pm/packages/authzed) client. Licet's [limitations](guides/limitations.md) page lists what it leaves out.
+* **Your rules are simple roles**, such as "admins can do everything": a policy module with [Bodyguard](https://hex.pm/packages/bodyguard) or [LetMe](https://hex.pm/packages/let_me) is less to learn.
 
 ## Documentation
 
-- [Getting started](guides/getting-started.md)
-- [Schema language](guides/zed.md)
-- [Consistency](guides/consistency.md)
-- [Transactions](guides/transactions.md)
-- [Design](guides/design.md)
-- [Security](guides/security.md)
+* [Getting started](guides/getting-started.md)
+* [Concepts](guides/concepts.md)
+* [Modeling permissions](guides/modeling.md) and the [schema language](guides/zed.md)
+* [Phoenix integration](guides/phoenix.md)
+* [Consistency](guides/consistency.md) and [transactions](guides/transactions.md)
+* [Testing](guides/testing.md)
+* [Operations](guides/operations.md), [telemetry](guides/telemetry.md), and [security](guides/security.md)
+* [Migrating to or from SpiceDB](guides/migrating.md)
 
-## Development
+## Contributing
 
-```shell
-mix test
-mix credo --strict
-mix docs --warnings-as-errors
-```
-
-Tests expect Postgres on `127.0.0.1:54329` by default (`PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`). They log at `:warning`; set `config :logger, level: :debug` in `config/test.exs` to see every query.
-
-`examples/playground` is a local playground for SpiceDB validation files, checked by Licet as you type (`mix setup && mix phx.server`).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to run the test suite, including the comparison against a live SpiceDB.
 
 ## License
 
-Apache-2.0. Copyright Netoum.
+Licet is released under the Apache License 2.0. Copyright Netoum.

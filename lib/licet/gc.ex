@@ -1,23 +1,44 @@
 defmodule Licet.GC do
   @moduledoc """
-  Deletes relationship tombstones and expired tuples outside the consistency window.
+  Garbage collection of old relationship history.
 
-  One node holds a session advisory lock, so a cluster does not collect the same
-  rows twice.
+  Licet keeps deleted and expired relationships, and the snapshots of past
+  writes, for `gc_window` seconds, so that tokens from that window can still be
+  read exactly. Every instance runs a collector that removes older history
+  every `gc_interval` milliseconds, in batches of `gc_batch` rows.
+
+  On several nodes, each pass takes a Postgres advisory lock, so only one node
+  collects at a time. Set `gc_interval: false` to disable automatic passes, for
+  example in tests or to trigger them from your own scheduler with `collect/1`.
   """
 
   use GenServer
 
   alias Licet.Store
 
+  @doc false
+  def child_spec(config), do: super(config)
+
+  @doc false
   @spec start_link(map()) :: GenServer.on_start()
   def start_link(config) do
     GenServer.start_link(__MODULE__, config, name: name(config.name))
   end
 
+  @doc false
   @spec name(atom()) :: module()
   def name(instance), do: Module.concat(instance, GC)
 
+  @doc """
+  Runs one collection pass on `instance` now and waits for it.
+
+  Returns `:locked` when another node holds the lock and is collecting.
+
+  ## Examples
+
+      Licet.GC.collect(MyApp.Licet)
+      #=> :ok
+  """
   @spec collect(atom()) :: :ok | :locked | {:error, Licet.Error.t()}
   def collect(instance) do
     GenServer.call(name(instance), :collect, :infinity)

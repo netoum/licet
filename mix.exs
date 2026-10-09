@@ -1,7 +1,7 @@
 defmodule Licet.MixProject do
   use Mix.Project
 
-  @version "1.0.0"
+  @version "0.0.1"
   @source_url "https://github.com/netoum/licet"
 
   def project do
@@ -69,7 +69,7 @@ defmodule Licet.MixProject do
   end
 
   defp description do
-    "Relationship-based authorization for Elixir, embedded in your Postgres database."
+    "Fine-grained, relationship-based authorization for Elixir, using SpiceDB's schema language and stored in your own Postgres database."
   end
 
   defp package do
@@ -91,29 +91,64 @@ defmodule Licet.MixProject do
       source_url: @source_url,
       source_ref: "v#{@version}",
       extras: [
-        "README.md",
-        "CHANGELOG.md": [title: "Changelog"],
+        "README.md": [title: "Overview"],
         "guides/getting-started.md": [title: "Getting started"],
-        "guides/modeling.md": [title: "Modeling"],
+        "guides/concepts.md": [title: "Concepts"],
+        "guides/cheatsheet.cheatmd": [title: "Cheatsheet"],
+        "guides/modeling.md": [title: "Modeling permissions"],
         "guides/zed.md": [title: "Schema language"],
+        "guides/phoenix.md": [title: "Phoenix integration"],
         "guides/consistency.md": [title: "Consistency"],
         "guides/transactions.md": [title: "Transactions"],
-        "guides/operations.md": [title: "Operations"],
         "guides/testing.md": [title: "Testing"],
-        "guides/migrating.md": [title: "Migrating"],
+        "guides/operations.md": [title: "Operations"],
+        "guides/telemetry.md": [title: "Telemetry"],
         "guides/security.md": [title: "Security"],
-        "guides/upgrade.md": [title: "Upgrade guide"],
-        "guides/benchmarks.md": [title: "Benchmarks"],
-        "guides/design.md": [title: "Design"],
+        "guides/migrating.md": [title: "Migrating to or from SpiceDB"],
+        "guides/limitations.md": [title: "Limitations"],
+        "guides/internals/design.md": [title: "Design"],
+        "guides/internals/conformance.md": [title: "Conformance testing"],
+        "guides/internals/benchmarks.md": [title: "Benchmarks"],
+        "CHANGELOG.md": [title: "Changelog"],
         "CONTRIBUTING.md": [title: "Contributing"],
         "CODE_OF_CONDUCT.md": [title: "Code of Conduct"]
       ],
+      groups_for_extras: [
+        Introduction: [
+          "README.md",
+          "guides/getting-started.md",
+          "guides/concepts.md",
+          "guides/cheatsheet.cheatmd"
+        ],
+        Guides: [
+          "guides/modeling.md",
+          "guides/zed.md",
+          "guides/phoenix.md",
+          "guides/consistency.md",
+          "guides/transactions.md",
+          "guides/testing.md"
+        ],
+        Operations: [
+          "guides/operations.md",
+          "guides/telemetry.md",
+          "guides/security.md",
+          "guides/migrating.md",
+          "guides/limitations.md"
+        ],
+        Internals: ~r"guides/internals/",
+        Project: ["CHANGELOG.md", "CONTRIBUTING.md", "CODE_OF_CONDUCT.md"]
+      ],
       groups_for_modules: [
-        Core: [Licet, Licet.Error, Licet.Relationship, Licet.Token, Licet.Config],
-        Schema: [Licet.Schema, Licet.Schema.Diff],
-        Engine: [Licet.Engine, Licet.Engine.Subjects],
-        Storage: [Licet.Migration, Licet.Store, Licet.GC],
-        Integration: [Licet.Multi, Licet.Testing, Licet.Validate]
+        Core: [Licet, Licet.Error, Licet.Relationship],
+        Schema: [Licet.Schema],
+        "Testing and tooling": [
+          Licet.Multi,
+          Licet.Testing,
+          Licet.Validate,
+          Mix.Tasks.Licet.Gen.Migration,
+          Mix.Tasks.Licet.Validate
+        ],
+        Storage: [Licet.Migration, Licet.GC]
       ],
       skip_undefined_reference_warnings_on: ["CHANGELOG.md"]
     ]

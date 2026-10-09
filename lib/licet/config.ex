@@ -1,25 +1,86 @@
 defmodule Licet.Config do
-  @moduledoc """
-  Validates the options for a Licet instance.
-  """
+  # Validates the options for a Licet instance.
+  @moduledoc false
 
   @prefix ~r/^[a-z_][a-z0-9_]{0,62}$/
 
   @schema NimbleOptions.new!(
-            name: [type: :atom, required: true],
-            repo: [type: :atom, required: true],
-            prefix: [type: :string, default: "licet"],
-            schema: [type: {:or, [nil, {:tuple, [:atom, :any]}]}, default: nil],
-            gc_interval: [type: {:or, [:non_neg_integer, {:in, [false]}]}, default: 300_000],
-            gc_window: [type: :pos_integer, default: 86_400],
-            quantization: [type: :pos_integer, default: 5_000],
-            max_depth: [type: :pos_integer, default: 50],
-            max_updates: [type: :pos_integer, default: 1_000],
-            max_import: [type: :pos_integer, default: 10_000],
-            max_preconditions: [type: :pos_integer, default: 1_000],
-            timeout: [type: :pos_integer, default: 5_000],
-            max_lookup: [type: :pos_integer, default: 10_000],
-            gc_batch: [type: :pos_integer, default: 1_000]
+            name: [
+              type: :atom,
+              required: true,
+              doc: "The instance name, passed as the first argument of every `Licet` function."
+            ],
+            repo: [
+              type: :atom,
+              required: true,
+              doc: "The `Ecto.Repo` that holds Licet's tables."
+            ],
+            prefix: [
+              type: :string,
+              default: "licet",
+              doc:
+                "The Postgres schema that holds the tables. It must match `^[a-z_][a-z0-9_]{0,62}$`."
+            ],
+            schema: [
+              type: {:or, [nil, {:tuple, [:atom, :any]}]},
+              default: nil,
+              doc: """
+              The schema to load at startup, as `{:file, path}` or `{:string, source}`. When it
+              differs from the stored schema, it is stored as a new version, unless the change would
+              strand stored relationships. `nil` keeps the stored schema.
+              """
+            ],
+            quantization: [
+              type: :pos_integer,
+              default: 5_000,
+              doc:
+                "Milliseconds between refreshes of the snapshot that `:minimize_latency` reads."
+            ],
+            timeout: [
+              type: :pos_integer,
+              default: 5_000,
+              doc: "Milliseconds allowed for one check or lookup."
+            ],
+            max_depth: [
+              type: :pos_integer,
+              default: 50,
+              doc: "Arrow and userset hops allowed in one check."
+            ],
+            max_lookup: [
+              type: :pos_integer,
+              default: 10_000,
+              doc: "Results one lookup may compute before failing with `:lookup_too_large`."
+            ],
+            max_updates: [
+              type: :pos_integer,
+              default: 1_000,
+              doc: "Updates allowed in one `Licet.write/3`."
+            ],
+            max_import: [
+              type: :pos_integer,
+              default: 10_000,
+              doc: "Relationships allowed in one `Licet.import/3`."
+            ],
+            max_preconditions: [
+              type: :pos_integer,
+              default: 1_000,
+              doc: "Preconditions allowed on one write."
+            ],
+            gc_interval: [
+              type: {:or, [:non_neg_integer, {:in, [false]}]},
+              default: 300_000,
+              doc: "Milliseconds between garbage collections, or `false` to disable them."
+            ],
+            gc_window: [
+              type: :pos_integer,
+              default: 86_400,
+              doc: "Seconds of history to keep. Exact reads of older tokens fail."
+            ],
+            gc_batch: [
+              type: :pos_integer,
+              default: 1_000,
+              doc: "Rows deleted per garbage collection batch."
+            ]
           )
 
   @type t :: %{
@@ -38,6 +99,10 @@ defmodule Licet.Config do
           max_lookup: pos_integer(),
           gc_batch: pos_integer()
         }
+
+  @doc false
+  @spec docs() :: String.t()
+  def docs, do: NimbleOptions.docs(@schema)
 
   @doc """
   Validates instance options and returns a config map.

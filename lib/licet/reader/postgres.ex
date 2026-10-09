@@ -1,7 +1,6 @@
 defmodule Licet.Reader.Postgres do
-  @moduledoc """
-  Relationship reader that queries the Licet tables in Postgres.
-  """
+  # Relationship reader that queries the Licet tables in Postgres.
+  @moduledoc false
 
   defstruct [:repo, :prefix]
 

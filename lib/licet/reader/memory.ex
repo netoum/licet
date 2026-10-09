@@ -1,7 +1,6 @@
 defmodule Licet.Reader.Memory do
-  @moduledoc """
-  Relationship reader backed by a list of tuples.
-  """
+  # Relationship reader backed by a list of tuples.
+  @moduledoc false
 
   defstruct tuples: []
 

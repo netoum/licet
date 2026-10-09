@@ -1,10 +1,9 @@
 defmodule Licet.Engine do
-  @moduledoc """
-  Evaluates a compiled schema against a relationship reader.
-
-  The same functions answer checks for Postgres and for the in-memory reader
-  used by `mix licet.validate`.
-  """
+  # Evaluates a compiled schema against a relationship reader.
+  #
+  # The same functions answer checks for Postgres and for the in-memory reader
+  # used by `mix licet.validate`.
+  @moduledoc false
 
   alias Licet.Engine.Membership
   alias Licet.Engine.Subjects

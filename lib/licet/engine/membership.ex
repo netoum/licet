@@ -1,15 +1,14 @@
 defmodule Licet.Engine.Membership do
-  @moduledoc """
-  Subjects found by a recursive expand, each with the relations that hold it.
-
-  This is the set behind expected relations in a validation file, the same
-  bookkeeping as SpiceDB's developer membership set without caveats. It is the
-  algebra of `Licet.Engine.Subjects`, plus the relations that hold each
-  subject: usersets such as `team:eng#member` are subjects too, and a wildcard
-  and concrete ids of the same type are kept side by side.
-
-  Subjects are `{type, id, relation}` tuples, with `""` for no relation.
-  """
+  # Subjects found by a recursive expand, each with the relations that hold it.
+  #
+  # This is the set behind expected relations in a validation file, the same
+  # bookkeeping as SpiceDB's developer membership set without caveats. It is the
+  # algebra of `Licet.Engine.Subjects`, plus the relations that hold each
+  # subject: usersets such as `team:eng#member` are subjects too, and a wildcard
+  # and concrete ids of the same type are kept side by side.
+  #
+  # Subjects are `{type, id, relation}` tuples, with `""` for no relation.
+  @moduledoc false
 
   defstruct sets: %{}
 

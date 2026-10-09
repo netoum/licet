@@ -1,12 +1,11 @@
 defmodule Licet.Token do
-  @moduledoc """
-  Opaque consistency token returned by writes.
-
-  A token names the Postgres snapshot at which that write is visible.
-  Tokens are versioned text. They are not a secret, but they are not a
-  stable primary key either: garbage collection rejects exact reads of
-  snapshots older than the configured window.
-  """
+  # Opaque consistency token returned by writes.
+  #
+  # A token names the Postgres snapshot at which that write is visible.
+  # Tokens are versioned text. They are not a secret, but they are not a
+  # stable primary key either: garbage collection rejects exact reads of
+  # snapshots older than the configured window.
+  @moduledoc false
 
   @type t :: String.t()
 

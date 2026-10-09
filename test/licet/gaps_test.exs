@@ -67,6 +67,10 @@ defmodule Licet.GapsTest do
   test "config, errors, migrations, and validation edges" do
     assert_raise Licet.Error, fn -> Licet.Config.fetch!(:not_running) end
 
+    docs = Licet.Config.docs()
+    defaults = Licet.Config.new!(name: :docs_cfg, repo: Licet.FakeRepo)
+    for key <- Map.keys(defaults), do: assert(docs =~ "`:#{key}`")
+
     assert %{schema: {:file, "priv/schema.zed"}} =
              Licet.Config.new!(
                name: :file_cfg,
