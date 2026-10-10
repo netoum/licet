@@ -59,7 +59,8 @@ defmodule Licet.Conformance do
 
   @doc "Every vendored corpus file, sorted."
   @spec files() :: [String.t()]
-  def files, do: @dir |> File.ls!() |> Enum.reject(&(&1 == "LICENSE")) |> Enum.sort()
+  def files,
+    do: @dir |> File.ls!() |> Enum.reject(&(&1 in ["LICENSE", "UPSTREAM"])) |> Enum.sort()
 
   @doc "The corpus files Licet runs."
   @spec runnable() :: [String.t()]

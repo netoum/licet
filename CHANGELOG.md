@@ -1,8 +1,10 @@
 # Changelog
 
-All notable changes to Licet are recorded here. Licet follows [Semantic Versioning](https://semver.org). Until 0.1, any release may change the public API.
+All notable changes to Licet are recorded here. Licet follows [Semantic Versioning](https://semver.org).
 
-## 0.0.1 (unreleased)
+## Unreleased
+
+## 0.1.0 (2026-10-10)
 
 The first public version.
 
@@ -19,7 +21,7 @@ The first public version.
 * Relationships, schema versions, and snapshots live in three tables in your own Postgres 15+ database, under a prefix you choose.
 * Writes join the caller's `Repo.transaction/2`. A check in the same transaction sees the uncommitted write, and a rollback discards it. A failed write is undone back to a savepoint and returned as an error, so the caller, or `Ecto.Multi`, decides what happens to the transaction.
 * Every write returns a consistency token. Checks accept four consistency modes: `:minimize_latency`, `{:at_least, token}`, `{:exact, token}`, and `:full`.
-* Schema changes that would strand stored relationships are rejected.
+* Schema changes that would strand stored relationships are rejected. A schema stored with `write_schema/3` reaches every node within one `quantization` interval.
 * Garbage collection removes old history behind a Postgres advisory lock, so only one node collects at a time.
 
 ### Queries

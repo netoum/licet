@@ -51,6 +51,11 @@ jobs:
           MIX_ENV: dev
         run: mix deps.get && mix docs --warnings-as-errors
 
+      - name: mix hex.build
+        env:
+          MIX_ENV: dev
+        run: mix hex.build
+
   unit-tests:
     name: Unit tests (OTP ${{ matrix.otp }} | Elixir ${{ matrix.elixir }} | Postgres ${{ matrix.postgres }})
     runs-on: ubuntu-24.04

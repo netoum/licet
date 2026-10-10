@@ -11,6 +11,15 @@ defmodule Licet.Store do
 
   @prefix ~r/^[a-z_][a-z0-9_]{0,62}$/
 
+  @filter_fields [
+    :resource_type,
+    :resource_id,
+    :relation,
+    :subject_type,
+    :subject_id,
+    :subject_relation
+  ]
+
   @spec migrated?(module(), String.t()) :: boolean()
   def migrated?(repo, prefix) do
     sql =
@@ -38,12 +47,46 @@ defmodule Licet.Store do
   @spec read(module(), String.t(), map(), map()) ::
           {:ok, [Relationship.t()]} | {:error, Error.t()}
   def read(repo, prefix, revision, filter) do
-    if blank?(filter) do
-      {:error, Error.new(:invalid_filter, "read requires a filter")}
-    else
-      {:ok, list_relationships(repo, prefix, Map.merge(revision_filter(revision), filter))}
+    cond do
+      blank?(filter) ->
+        {:error, Error.new(:invalid_filter, "read requires a filter")}
+
+      error = filter_error(filter) ->
+        {:error, error}
+
+      true ->
+        {:ok, list_relationships(repo, prefix, Map.merge(filter, revision_filter(revision)))}
     end
   end
+
+  @doc false
+  @spec filter_error(term()) :: Error.t() | nil
+  def filter_error(filter) when is_map(filter) do
+    Enum.find_value(filter, fn
+      {field, value} when field in @filter_fields ->
+        unless filter_value?(value) do
+          Error.new(:invalid_filter, "#{field} must be a string or a list of strings")
+        end
+
+      {field, _value} ->
+        Error.new(:invalid_filter, "unknown filter field #{inspect(field)}")
+    end)
+  end
+
+  def filter_error(other), do: Error.new(:invalid_filter, "invalid filter #{inspect(other)}")
+
+  defp valid_filter(filter) do
+    case filter_error(filter) do
+      nil -> :ok
+      error -> {:error, error}
+    end
+  end
+
+  defp filter_value?(value) when is_binary(value), do: true
+
+  defp filter_value?([_ | _] = values), do: Enum.all?(values, &is_binary/1)
+
+  defp filter_value?(_value), do: false
 
   @spec write(module(), String.t(), list(), list(), map(), map()) ::
           {:ok, Token.t()} | {:error, Error.t()}
@@ -61,6 +104,7 @@ defmodule Licet.Store do
           {:ok, Token.t()} | {:error, Error.t()}
   def delete_matching(repo, prefix, filter, metadata) do
     with :ok <- require_type(filter),
+         :ok <- valid_filter(filter),
          {:ok, revision} <- assign(repo),
          :ok <- insert_transaction(repo, prefix, revision, metadata),
          :ok <- tombstone_filter(repo, prefix, revision.xid, filter) do
@@ -78,6 +122,21 @@ defmodule Licet.Store do
     with {:ok, %{rows: rows}} <- query(repo, sql, []) do
       case rows do
         [[source]] -> {:ok, source}
+        [] -> {:ok, nil}
+      end
+    end
+  end
+
+  @spec current_schema_hash(module(), String.t()) :: {:ok, String.t() | nil} | {:error, Error.t()}
+  def current_schema_hash(repo, prefix) do
+    prefix = prefix!(prefix)
+
+    sql =
+      "SELECT hash FROM #{prefix}.schemas WHERE deleted_xid IS NULL ORDER BY version DESC LIMIT 1"
+
+    with {:ok, %{rows: rows}} <- query(repo, sql, []) do
+      case rows do
+        [[hash]] -> {:ok, hash}
         [] -> {:ok, nil}
       end
     end
@@ -226,7 +285,7 @@ defmodule Licet.Store do
   end
 
   defp precondition(repo, prefix, revision, {op, filter}) do
-    rows = list_relationships(repo, prefix, Map.merge(revision_filter(revision), filter))
+    rows = list_relationships(repo, prefix, Map.merge(filter, revision_filter(revision)))
     matches = rows != []
 
     case {op, matches} do
@@ -541,16 +600,7 @@ defmodule Licet.Store do
   end
 
   defp filter_clause(filter, params) do
-    fields = [
-      :resource_type,
-      :resource_id,
-      :relation,
-      :subject_type,
-      :subject_id,
-      :subject_relation
-    ]
-
-    Enum.reduce(fields, {"", params}, fn field, {sql, acc} ->
+    Enum.reduce(@filter_fields, {"", params}, fn field, {sql, acc} ->
       case Map.get(filter, field) do
         nil ->
           {sql, acc}
@@ -595,10 +645,7 @@ defmodule Licet.Store do
   defp own(filter), do: Map.get(filter, :own_xid) || ""
 
   defp blank?(filter) do
-    not Enum.any?(
-      [:resource_type, :resource_id, :relation, :subject_type, :subject_id, :subject_relation],
-      &Map.get(filter, &1)
-    )
+    not Enum.any?(@filter_fields, &Map.get(filter, &1))
   end
 
   defp require_type(%{resource_type: type}) when is_binary(type) and type != "", do: :ok

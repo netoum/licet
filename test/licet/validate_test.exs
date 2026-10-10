@@ -37,6 +37,43 @@ defmodule Licet.ValidateTest do
     ])
 
     assert File.read!(path) =~ "Licet.Migration.up"
+
+    assert_raise Mix.Error, ~r/already exists/, fn ->
+      Mix.Task.rerun("licet.gen.migration", ["--path", path])
+    end
+
+    File.rm(path)
+
+    assert_raise Mix.Error, ~r/--pathh/, fn ->
+      Mix.Task.rerun("licet.gen.migration", ["--pathh", path])
+    end
+
+    assert_raise Mix.Error, ~r/unexpected argument/, fn ->
+      Mix.Task.rerun("licet.gen.migration", ["extra"])
+    end
+
+    assert_raise Mix.Error, ~r/not a valid Postgres schema/, fn ->
+      Mix.Task.rerun("licet.gen.migration", ["--prefix", "Bad-Name", "--path", path])
+    end
+
+    refute File.exists?(path)
+
+    Mix.Task.rerun("licet.gen.migration", ["--path", path])
+    assert File.read!(path) =~ "defmodule Licet.Repo.Migrations.InstallLicet"
+    File.rm(path)
+  end
+
+  test "the validate task prints help and schema error positions" do
+    help = ExUnit.CaptureIO.capture_io(fn -> Mix.Task.rerun("licet.validate", ["--help"]) end)
+    assert help =~ "FILE:LINE:COLUMN"
+
+    path = "tmp/broken_schema.yaml"
+    File.write!(path, "schema: |\n  definition user {\n    relation\n  }\n")
+
+    assert_raise Mix.Error, ~r/^tmp\/broken_schema\.yaml:\d+:\d+: /, fn ->
+      Mix.Task.rerun("licet.validate", [path])
+    end
+
     File.rm(path)
   end
 

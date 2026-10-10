@@ -1,6 +1,6 @@
 # Telemetry
 
-Licet emits [`:telemetry`](https://hexdocs.pm/telemetry) events for checks, lookups, writes, and the check cache. Attach handlers to them to export metrics or log slow queries.
+Licet emits [`:telemetry`](https://hexdocs.pm/telemetry) events for checks, lookups, writes and imports, and the check cache. Attach handlers to them to export metrics or log slow queries.
 
 ## Span events
 
@@ -23,11 +23,11 @@ Durations are in native time units. Convert them with `System.convert_time_unit/
 
 A check that returns `{:error, _}` still ends with a `:stop` event. `:exception` is emitted only when the call raises.
 
-`Licet.check_bulk/3` doesn't emit per-item check events.
+These functions emit no span event: `Licet.check_bulk/3`, `Licet.read/3`, `Licet.delete/3`, `Licet.explain/5`, and `Licet.write_schema/3`. `check_bulk/3` does emit cache events, below.
 
 ## Cache events
 
-Each check outside a transaction first looks in the cache:
+Each check outside a transaction first looks in the cache. `Licet.check_bulk/3` looks up each distinct item, so a bulk call emits one cache event per distinct check:
 
 | Event | Measurements | Metadata |
 | --- | --- | --- |

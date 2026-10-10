@@ -1,6 +1,6 @@
 # Benchmarks
 
-`bench/compare.exs` runs Licet and SpiceDB side by side on one machine, against one Postgres server, with the same schema, relationships, and requests. This page describes the method, how to run it, and one set of results.
+[`bench/compare.exs`](https://github.com/netoum/licet/blob/main/bench/compare.exs) runs Licet and SpiceDB side by side on one machine, against one Postgres server, with the same schema, relationships, and requests. This page describes the method, how to run it, and one set of results. The script lives in the GitHub repository and isn't part of the Hex package.
 
 ## Method
 

@@ -510,5 +510,53 @@ defmodule LicetTest do
     end
 
     assert :ok = Licet.Testing.allow(Licet.FakeRepo, self(), self())
+
+    assert {:error, %{reason: :not_started}} = Licet.GC.collect(:missing_licet)
+
+    assert_raise NimbleOptions.ValidationError, fn ->
+      Licet.Config.new!(name: :bad, repo: Licet.TestRepo, gc_interval: 0)
+    end
+  end
+
+  test "rejects malformed filters, preconditions, limits, and bulk items" do
+    name = start_licet!(@schema)
+    {:ok, _} = Licet.write(name, [{:create, "document:1#owner@user:ada"}])
+
+    for filter <- [
+          %{resource_type: "document", snapshot: "1:1:"},
+          %{resource_type: "document", resource_id: nil},
+          %{resource_type: "document", resource_id: 1},
+          %{resource_type: "document", resource_id: []},
+          %{resource_type: "document", resource_id: ["1", :two]}
+        ] do
+      assert {:error, %{reason: :invalid_filter}} = Licet.read(name, filter)
+      assert {:error, %{reason: :invalid_filter}} = Licet.delete(name, filter)
+
+      assert {:error, %{reason: :invalid_filter}} =
+               Licet.write(name, [], preconditions: [{:must_match, filter}])
+    end
+
+    assert {:ok, [_]} = Licet.read(name, %{resource_type: "document", resource_id: ["1", "2"]})
+
+    assert {:error, %{reason: :invalid_filter}} =
+             Licet.write(name, [], preconditions: [{:maybe, %{resource_type: "document"}}])
+
+    assert {:error, %{reason: :invalid_filter}} =
+             Licet.write(name, [], preconditions: [{:must_match, :nope}])
+
+    for limit <- [0, -1, "10", nil] do
+      assert {:error, %{reason: :invalid_filter}} =
+               Licet.lookup_resources(name, "document", "view", "user:ada", limit: limit)
+
+      assert {:error, %{reason: :invalid_filter}} =
+               Licet.lookup_subjects(name, "document:1", "view", "user", limit: limit)
+    end
+
+    assert {:ok, [{:ok, :allowed}, {:error, %{reason: :invalid_relationship}}, {:error, _}]} =
+             Licet.check_bulk(name, [
+               %{resource: "document:1", permission: "view", subject: "user:ada"},
+               %{resource: "document:1", subject: "user:ada"},
+               "document:1#view@user:ada"
+             ])
   end
 end

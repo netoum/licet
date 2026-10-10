@@ -32,7 +32,9 @@ defmodule Licet.GC do
   @doc """
   Runs one collection pass on `instance` now and waits for it.
 
-  Returns `:locked` when another node holds the lock and is collecting.
+  Returns `:locked` when another node holds the lock and is collecting, and
+  `{:error, %Licet.Error{reason: :not_started}}` when no instance with that
+  name is running.
 
   ## Examples
 
@@ -40,8 +42,11 @@ defmodule Licet.GC do
       #=> :ok
   """
   @spec collect(atom()) :: :ok | :locked | {:error, Licet.Error.t()}
-  def collect(instance) do
-    GenServer.call(name(instance), :collect, :infinity)
+  def collect(instance) when is_atom(instance) do
+    case GenServer.whereis(name(instance)) do
+      nil -> {:error, Licet.Error.new(:not_started, "#{inspect(instance)} is not running")}
+      pid -> GenServer.call(pid, :collect, :infinity)
+    end
   end
 
   @impl true

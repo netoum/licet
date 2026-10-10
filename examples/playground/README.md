@@ -28,3 +28,6 @@ Then open [localhost:4000](http://localhost:4000).
 
 The UI is built with [Corex](https://hexdocs.pm/corex). `mix test` covers the
 import format and the LiveView.
+
+The playground depends on the library in this repository with
+`{:licet, path: "../.."}`. If you copy it out, use `{:licet, "~> 0.1"}` instead.

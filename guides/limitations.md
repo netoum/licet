@@ -2,10 +2,6 @@
 
 Licet implements most of SpiceDB's schema language and query API inside your application. This page lists what it doesn't do, so you can decide early whether it fits.
 
-## Stability
-
-Licet is at version 0.0.x. Until 0.1, any release may change the public API, the table layout, or the token format. Each change is described in the [changelog](../CHANGELOG.md). Pin an exact version or commit in `mix.exs` and read the changelog before you upgrade.
-
 ## Not supported
 
 **Caveats.** SpiceDB's `caveat` blocks attach CEL expressions to relationships, for example "only during business hours". Licet rejects a schema that declares one. Put conditions like these in your application code, next to the call to `Licet.check/5`.
@@ -26,4 +22,4 @@ Consistency tokens don't transfer between the two. A Licet token names a Postgre
 
 ## Developing a validation file
 
-`mix licet.validate` checks a SpiceDB validation file in the terminal. For a browser editor, the repository includes `examples/playground`, a small Phoenix app that checks the file as you type. See [Testing](testing.md).
+`mix licet.validate` checks a SpiceDB validation file in the terminal. For a browser editor, the repository includes [`examples/playground`](https://github.com/netoum/licet/tree/main/examples/playground), a small Phoenix app that checks the file as you type. See [Testing](testing.md).

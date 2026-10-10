@@ -35,3 +35,5 @@ curl -s 'http://127.0.0.1:4000/posts?user_id=bob'
 ```
 
 `mix test` creates `blog_test` and runs the context tests. See the [Phoenix integration](../../guides/phoenix.md) guide for the patterns this example implements.
+
+The example depends on the library in this repository with `{:licet, path: "../.."}`. If you copy it out, use `{:licet, "~> 0.1"}` instead.

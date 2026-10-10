@@ -67,7 +67,7 @@ defmodule Licet.Config do
               doc: "Preconditions allowed on one write."
             ],
             gc_interval: [
-              type: {:or, [:non_neg_integer, {:in, [false]}]},
+              type: {:or, [:pos_integer, {:in, [false]}]},
               default: 300_000,
               doc: "Milliseconds between garbage collections, or `false` to disable them."
             ],
@@ -88,7 +88,7 @@ defmodule Licet.Config do
           repo: module(),
           prefix: String.t(),
           schema: nil | {:file, Path.t()} | {:string, String.t()},
-          gc_interval: non_neg_integer() | false,
+          gc_interval: pos_integer() | false,
           gc_window: pos_integer(),
           quantization: pos_integer(),
           max_depth: pos_integer(),

@@ -155,6 +155,65 @@ defmodule Licet.CoverTest do
              Licet.Store.collect(Licet.TestRepo, config.prefix, 86_400, 1)
   end
 
+  test "write_schema refuses to run inside an open transaction" do
+    name = start_licet!(@schema)
+
+    assert {:error, {:error, %{reason: :in_transaction}}} =
+             Licet.TestRepo.transaction(fn ->
+               Licet.TestRepo.rollback(Licet.write_schema(name, @schema <> "\n// tx\n"))
+             end)
+
+    {:ok, schema} = Licet.SchemaServer.get(name)
+    refute schema.source =~ "// tx"
+  end
+
+  test "reloads a schema stored by another node" do
+    name = start_licet!(@schema)
+    config = Licet.Config.fetch!(name)
+    widened = @schema <> "\ndefinition project {}\n"
+    {:ok, parsed} = Licet.Schema.parse(widened)
+
+    {:ok, _} =
+      Licet.TestRepo.transaction(fn ->
+        Licet.Store.write_schema(Licet.TestRepo, config.prefix, widened, parsed.hash, %{})
+      end)
+
+    server = Process.whereis(Licet.SchemaServer.name(name))
+    send(server, :reload)
+    _ = :sys.get_state(server)
+
+    {:ok, schema} = Licet.SchemaServer.get(name)
+    assert Map.has_key?(schema.definitions, "project")
+
+    send(server, :reload)
+    assert %{hash: hash} = :sys.get_state(server)
+    assert hash == parsed.hash
+
+    Licet.TestRepo.transaction(fn ->
+      Licet.Store.write_schema(Licet.TestRepo, config.prefix, "", "blank", %{})
+    end)
+
+    send(server, :reload)
+    _ = :sys.get_state(server)
+    assert {:ok, %{definitions: definitions}} = Licet.SchemaServer.get(name)
+    assert definitions == %{}
+
+    Licet.TestRepo.transaction(fn ->
+      Licet.Store.write_schema(Licet.TestRepo, config.prefix, "!!!", "broken", %{})
+    end)
+
+    send(server, :reload)
+    assert %{hash: "blank"} = :sys.get_state(server)
+
+    bad = "b" <> Integer.to_string(System.unique_integer([:positive]))
+    Licet.TestRepo.query!("CREATE SCHEMA #{bad}")
+    Licet.TestRepo.query!("CREATE TABLE #{bad}.schemas (version int, deleted_xid xid8)")
+    :sys.replace_state(server, &put_in(&1, [:config, :prefix], bad))
+
+    send(server, :reload)
+    assert %{hash: "blank"} = :sys.get_state(server)
+  end
+
   test "reads an exact token inside its transaction and rejects an unknown xid" do
     name = start_licet!(@schema)
 

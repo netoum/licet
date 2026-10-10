@@ -1,0 +1,13 @@
+Source:  https://github.com/authzed/spicedb
+Path:    internal/services/integrationtesting/testconfigs
+Commit:  ee99672dd63ac9838a927a9515c3f1804a073570 (2026-10-07)
+License: Apache License 2.0, see LICENSE in this directory
+
+SpiceDB
+Copyright 2022 Authzed, Inc
+
+This product includes software developed at
+Authzed, Inc. (https://www.authzed.com/).
+
+The YAML files in this directory are copied unchanged. testconfigs.go is not
+included.

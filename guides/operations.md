@@ -30,7 +30,7 @@ The `Licet` module documentation describes each option in detail.
 The schema can change in two ways:
 
 * Deploy a new schema file. When an instance starts with a `schema` that differs from the stored one, it stores the new version.
-* Call `Licet.write_schema/3` at runtime.
+* Call `Licet.write_schema/3` at runtime, outside any transaction.
 
 Either way, Licet first compares the new schema with the relationships that are stored, and refuses with `:unsafe_schema_change` when the change would leave some of them meaningless:
 
@@ -95,7 +95,7 @@ trace
 #=> }
 ```
 
-Each node names a resource and permission, its result, and the nodes evaluated beneath it. Explain follows the same path as a check but runs sequentially and never uses the cache, so it's slower. Use it to debug, not to serve requests.
+Each node names a resource and permission, its result, and the nodes evaluated beneath it. When the check is allowed, the trace follows the path that granted access. When it's denied, the trace is shallower: it shows the relations checked directly on the resource, but not the objects an arrow or userset reached without finding the subject. Explain follows the same path as a check but runs sequentially and never uses the cache, so it's slower. Use it to debug, not to serve requests.
 
 ## Garbage collection
 
@@ -107,7 +107,7 @@ Set `gc_interval: false` to disable automatic collection, for example in tests o
 
 ## Several nodes
 
-Each node runs its own instance against the same database, with the same options. The shared snapshot and the cache are per node, so two nodes can briefly disagree under `:minimize_latency`, by at most one `quantization` interval. Pass tokens between requests when a user must see their own writes on whichever node serves them. See [Consistency](consistency.md).
+Each node runs its own instance against the same database, with the same options. The shared snapshot and the cache are per node, so two nodes can briefly disagree under `:minimize_latency`, by at most one `quantization` interval. Schema changes travel the same way: each instance polls the stored schema every `quantization` milliseconds, so a `Licet.write_schema/3` on one node reaches the others within one interval. Pass tokens between requests when a user must see their own writes on whichever node serves them. See [Consistency](consistency.md).
 
 ## Monitoring
 

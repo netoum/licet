@@ -4,7 +4,9 @@ Because Licet stores relationships in your database, its writes can be part of y
 
 ## Joining a transaction
 
-`Licet.write/3`, `Licet.import/3`, `Licet.delete/3`, and `Licet.write_schema/3` join the caller's `Repo.transaction/2` when one is open on the same repo. Otherwise each opens its own transaction.
+`Licet.write/3`, `Licet.import/3`, and `Licet.delete/3` join the caller's `Repo.transaction/2` when one is open on the same repo. Otherwise each opens its own transaction.
+
+`Licet.write_schema/3` is the exception: it returns `{:error, %Licet.Error{reason: :in_transaction}}` inside an open transaction, because the new schema is published to the node before your transaction could roll it back.
 
 ```elixir
 MyApp.Repo.transaction(fn ->

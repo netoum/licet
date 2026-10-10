@@ -1,7 +1,7 @@
 defmodule Licet.MixProject do
   use Mix.Project
 
-  @version "0.0.1"
+  @version "0.1.0"
   @source_url "https://github.com/netoum/licet"
 
   def project do
@@ -9,6 +9,8 @@ defmodule Licet.MixProject do
       app: :licet,
       name: "Licet",
       version: @version,
+      source_url: @source_url,
+      homepage_url: @source_url,
       elixir: "~> 1.17",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
@@ -69,7 +71,7 @@ defmodule Licet.MixProject do
   end
 
   defp description do
-    "Fine-grained, relationship-based authorization for Elixir, using SpiceDB's schema language and stored in your own Postgres database."
+    "Run SpiceDB (.zed) permission schemas inside your Elixir app, with relationships stored in your own Postgres database."
   end
 
   defp package do

@@ -3,3 +3,12 @@ Copyright 2026 Netoum
 
 This product is licensed under the Apache License, Version 2.0.
 See the LICENSE file for the full text.
+
+Licet implements the schema language and evaluation semantics of SpiceDB
+(https://github.com/authzed/spicedb), which is Copyright 2022 Authzed, Inc and
+licensed under the Apache License, Version 2.0. The source repository's test
+suite includes SpiceDB's consistency test configurations and ports of several
+SpiceDB tests; see test/conformance/spicedb/UPSTREAM.
+
+SpiceDB is a trademark of Authzed, Inc. Licet is an independent project and is
+not affiliated with Authzed, Inc.

@@ -2,9 +2,11 @@
 
 Licet aims to give the same answers as SpiceDB for every schema it accepts. This page describes how that is tested. It's written for contributors; you don't need it to use Licet.
 
+The tests live in the [GitHub repository](https://github.com/netoum/licet/tree/main/test) and aren't part of the Hex package.
+
 ## SpiceDB's consistency corpus
 
-`test/conformance/spicedb/` vendors SpiceDB's consistency corpus (`internal/services/integrationtesting/testconfigs`) under its Apache-2.0 license. The upstream commit is recorded in that directory's `LICENSE`.
+[`test/conformance/spicedb/`](https://github.com/netoum/licet/tree/main/test/conformance/spicedb) vendors SpiceDB's consistency corpus (`internal/services/integrationtesting/testconfigs`) under its Apache-2.0 license, with SpiceDB's `LICENSE`. The upstream commit is recorded in that directory's `UPSTREAM` file.
 
 Every file in the corpus is either run or skipped. A skipped file must fail to parse with the exact error recorded for it, which today means files that use caveats or `use self`. No file is special-cased.
 

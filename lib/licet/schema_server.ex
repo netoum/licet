@@ -33,20 +33,49 @@ defmodule Licet.SchemaServer do
   def init(config) do
     Process.flag(:trap_exit, true)
 
-    case load(config) do
-      {:ok, schema} ->
-        put(config.name, schema)
-        {:ok, config}
-
-      {:error, error} ->
-        {:stop, error}
+    with {:ok, schema} <- load(config),
+         {:ok, hash} <- Store.current_schema_hash(config.repo, config.prefix) do
+      put(config.name, schema)
+      schedule(config)
+      {:ok, %{config: config, hash: hash}}
+    else
+      {:error, error} -> {:stop, error}
     end
   end
 
   @impl true
-  def terminate(_reason, config) do
-    :persistent_term.erase({Licet, config.name, :schema})
+  def handle_info(:reload, state) do
+    schedule(state.config)
+    {:noreply, reload(state)}
+  end
+
+  @impl true
+  def terminate(_reason, state) do
+    :persistent_term.erase({Licet, state.config.name, :schema})
     :ok
+  end
+
+  # Another node may have stored a new schema with `Licet.write_schema/3`.
+  # A failed poll keeps the current schema and retries on the next tick.
+  defp reload(%{config: config} = state) do
+    with {:ok, hash} when hash != state.hash <-
+           Store.current_schema_hash(config.repo, config.prefix),
+         {:ok, source} <- Store.current_schema(config.repo, config.prefix),
+         {:ok, schema} <- parse_stored(source) do
+      put(config.name, schema)
+      %{state | hash: hash}
+    else
+      _unchanged_or_failed -> state
+    end
+  rescue
+    _error in [DBConnection.ConnectionError, Postgrex.Error] -> state
+  end
+
+  defp parse_stored(source) when source in [nil, ""], do: {:ok, empty()}
+  defp parse_stored(source), do: Schema.parse(source)
+
+  defp schedule(config) do
+    Process.send_after(self(), :reload, config.quantization)
   end
 
   defp load(config) do

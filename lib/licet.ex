@@ -42,8 +42,10 @@ defmodule Licet do
       `"document:roadmap#viewer@team:eng#member"`, optionally followed by
       `[expiration:2027-01-01T00:00:00Z]`.
 
-  Ids are 1 to 1024 characters from `A-Z`, `a-z`, `0-9`, and `/_|=-+`.
-  `Licet.Relationship` parses and prints the relationship format.
+  Ids are 1 to 1024 characters from `A-Z`, `a-z`, `0-9`, and `/_|=-+`. Type
+  and relation names are lowercase, 3 to 64 characters, and types may be
+  namespaced as `prefix/name`, up to 128 characters. `Licet.Relationship`
+  parses and prints the relationship format.
 
   ## Consistency
 
@@ -77,15 +79,17 @@ defmodule Licet do
           {:create | :touch | :delete, String.t() | Licet.Relationship.t()}
 
   @typedoc """
-  Selects relationships by any of their fields. Fields that are absent match anything.
+  Selects relationships by any of their fields. Fields that are absent match
+  anything. A list matches any of its values. Other keys, and `nil` values,
+  are rejected with `:invalid_filter`.
   """
   @type filter :: %{
-          optional(:resource_type) => String.t(),
-          optional(:resource_id) => String.t(),
-          optional(:relation) => String.t(),
-          optional(:subject_type) => String.t(),
-          optional(:subject_id) => String.t(),
-          optional(:subject_relation) => String.t()
+          optional(:resource_type) => String.t() | [String.t(), ...],
+          optional(:resource_id) => String.t() | [String.t(), ...],
+          optional(:relation) => String.t() | [String.t(), ...],
+          optional(:subject_type) => String.t() | [String.t(), ...],
+          optional(:subject_id) => String.t() | [String.t(), ...],
+          optional(:subject_relation) => String.t() | [String.t(), ...]
         }
 
   use Supervisor
@@ -111,10 +115,9 @@ defmodule Licet do
   The instance fails to start if the Licet tables don't exist, or if the
   configured schema is invalid or would strand stored relationships.
   """
-  @spec start_link(keyword() | map()) :: Supervisor.on_start()
-  def start_link(opts) when is_list(opts), do: start_link(Config.new!(opts))
-
-  def start_link(%{} = config) do
+  @spec start_link(keyword()) :: Supervisor.on_start()
+  def start_link(opts) when is_list(opts) do
+    config = Config.new!(opts)
     Supervisor.start_link(__MODULE__, config, name: config.name)
   end
 
@@ -125,7 +128,7 @@ defmodule Licet do
 
     %{
       id: config.name,
-      start: {__MODULE__, :start_link, [config]},
+      start: {__MODULE__, :start_link, [opts]},
       type: :supervisor
     }
   end
@@ -180,7 +183,8 @@ defmodule Licet do
     * `:precondition_failed` - a precondition didn't hold
     * `:too_many_updates`, `:too_many_preconditions` - over `max_updates` or
       `max_preconditions`
-    * `:invalid_filter` - `:preconditions` isn't a list
+    * `:invalid_filter` - `:preconditions` isn't a list, or a precondition
+      isn't `{:must_match | :must_not_match, filter}` with a valid filter
 
   ## Examples
 
@@ -215,13 +219,18 @@ defmodule Licet do
   Deleted relationships stay readable at older snapshots until garbage
   collection removes them, after `gc_window`.
 
+  Unlike `write/3`, a delete isn't bounded by `max_updates`: it removes every
+  match in one statement, and it emits no telemetry event. Narrow the filter
+  when a match could be very large.
+
   ## Options
 
     * `:metadata` - a map stored with the write's transaction record.
 
   ## Errors
 
-    * `:invalid_filter` - the filter has no `:resource_type`
+    * `:invalid_filter` - the filter has no `:resource_type`, names an unknown
+      field, or has a value that isn't a string or a list of strings
 
   ## Examples
 
@@ -255,7 +264,8 @@ defmodule Licet do
 
   ## Errors
 
-    * `:invalid_filter` - the filter is empty
+    * `:invalid_filter` - the filter is empty, names an unknown field, or has a
+      value that isn't a string or a list of strings
     * `:token_invalid`, `:token_not_committed`, `:snapshot_expired` - see
       [Consistency](consistency.md)
 
@@ -321,9 +331,10 @@ defmodule Licet do
   Runs several checks at one snapshot.
 
   Each check is a map with `:resource`, `:permission`, and `:subject`, as in
-  `check/5`. The results come back in the same order. A failing check returns
-  its own `{:error, _}` without stopping the others; the call as a whole fails
-  only when the snapshot can't be resolved.
+  `check/5`. The results come back in the same order. A failing check,
+  including an item that isn't such a map, returns its own `{:error, _}`
+  without stopping the others; the call as a whole fails only when the
+  snapshot can't be resolved.
 
   All checks read the same snapshot, so their answers are consistent with each
   other.
@@ -371,7 +382,8 @@ defmodule Licet do
     * `:invalid_relationship` - malformed subject text
     * `:unknown_type`, `:unknown_relation` - not in the schema
     * `:lookup_too_large`, `:depth_exceeded`, `:timeout` - over an instance limit
-    * `:invalid_filter` - a malformed cursor
+    * `:invalid_filter` - a malformed cursor, or a `:limit` that isn't a
+      positive integer
 
   ## Examples
 
@@ -416,7 +428,8 @@ defmodule Licet do
   ## Errors
 
     * `:invalid_relationship` - malformed resource text
-    * `:invalid_filter` - a malformed subject type or cursor
+    * `:invalid_filter` - a malformed subject type or cursor, or a `:limit`
+      that isn't a positive integer
     * `:unknown_type`, `:unknown_relation` - not in the schema
     * `:lookup_too_large`, `:depth_exceeded`, `:timeout` - over an instance limit
 
@@ -446,6 +459,11 @@ defmodule Licet do
   with a trace. Each trace node is a map with the `:resource` and
   `:permission` it evaluated, its `:result`, and the `:children` evaluated
   beneath it.
+
+  An allowed trace follows the path that granted access, down to the
+  relationship that matched. A denied trace is shallower: it lists the
+  relations checked directly on the resource, but omits the objects an arrow
+  or userset reached without finding the subject.
 
   Explain never uses the cache and evaluates arrows sequentially, so it's
   slower than `check/5`. Use it for debugging.
@@ -487,6 +505,11 @@ defmodule Licet do
   Most applications set the schema with the `:schema` option instead, which
   applies the same rules at startup. See [Operations](operations.md).
 
+  The new schema applies on this node immediately. Other nodes running an
+  instance on the same tables pick it up within `quantization` milliseconds.
+  Unlike `write/3`, it can't join an open transaction, because a rollback
+  would leave nodes using a schema that was never stored.
+
   ## Options
 
     * `:metadata` - a map stored with the write's transaction record.
@@ -495,6 +518,7 @@ defmodule Licet do
 
     * `:invalid_schema` - the text doesn't parse; `details` has the line and column
     * `:unsafe_schema_change` - the change would strand stored relationships
+    * `:in_transaction` - called inside an open `Repo.transaction/2`
 
   ## Examples
 
@@ -503,6 +527,7 @@ defmodule Licet do
   @spec write_schema(instance(), String.t(), keyword()) :: {:ok, token()} | {:error, Error.t()}
   def write_schema(name, source, opts \\ []) when is_binary(source) do
     with {:ok, config} <- fetch(name),
+         :ok <- outside_transaction(config.repo),
          {:ok, parsed} <- Licet.Schema.parse(source),
          {:ok, old} <- current_parsed(config) do
       metadata = Keyword.get(opts, :metadata, %{})
@@ -542,8 +567,7 @@ defmodule Licet do
   @spec import(instance(), [String.t() | Relationship.t()], keyword()) ::
           {:ok, token()} | {:error, Error.t()}
   def import(name, relationships, opts \\ []) when is_list(relationships) do
-    with {:ok, config} <- fetch(name),
-         :ok <- within(relationships, config.max_import) do
+    with {:ok, config} <- fetch(name) do
       do_write(config, name, Enum.map(relationships, &{:create, &1}), opts, config.max_import)
     end
   end
@@ -573,7 +597,8 @@ defmodule Licet do
   end
 
   defp do_lookup_resources(name, type, permission, subject, opts) do
-    with {:ok, prepared} <- prepare(name, opts),
+    with {:ok, limit} <- page_limit(opts),
+         {:ok, prepared} <- prepare(name, opts),
          {:ok, subject} <- object(subject, true),
          {:ok, ids} <-
            Engine.resource_ids(
@@ -585,16 +610,13 @@ defmodule Licet do
              subject,
              prepared.opts
            ) do
-      Licet.Page.slice(
-        Enum.to_list(ids),
-        Keyword.get(opts, :cursor),
-        Keyword.get(opts, :limit, 100)
-      )
+      Licet.Page.slice(Enum.to_list(ids), Keyword.get(opts, :cursor), limit)
     end
   end
 
   defp do_lookup_subjects(name, resource, permission, subject_type, opts) do
-    with {:ok, prepared} <- prepare(name, opts),
+    with {:ok, limit} <- page_limit(opts),
+         {:ok, prepared} <- prepare(name, opts),
          {:ok, resource} <- object(resource, false),
          {:ok, subject_type} <- subject_type(subject_type),
          {:ok, set} <-
@@ -611,13 +633,20 @@ defmodule Licet do
       found = Map.new(Subjects.to_list(set), &format_found/1)
 
       with {:ok, page, cursor} <-
-             Licet.Page.slice(
-               Map.keys(found),
-               Keyword.get(opts, :cursor),
-               Keyword.get(opts, :limit, 100)
-             ) do
+             Licet.Page.slice(Map.keys(found), Keyword.get(opts, :cursor), limit) do
         {:ok, Enum.map(page, &%{subject: &1, excluded: Map.fetch!(found, &1)}), cursor}
       end
+    end
+  end
+
+  defp page_limit(opts) do
+    case Keyword.get(opts, :limit, 100) do
+      limit when is_integer(limit) and limit > 0 ->
+        {:ok, limit}
+
+      other ->
+        {:error,
+         Error.new(:invalid_filter, "limit must be a positive integer, got #{inspect(other)}")}
     end
   end
 
@@ -721,11 +750,20 @@ defmodule Licet do
     end)
   end
 
-  defp bulk_item(check) do
-    with {:ok, resource} <- object(check.resource, false),
-         {:ok, subject} <- object(check.subject, true) do
-      {:ok, {resource, check.permission, subject}}
+  defp bulk_item(%{resource: resource, permission: permission, subject: subject})
+       when is_binary(permission) do
+    with {:ok, resource} <- object(resource, false),
+         {:ok, subject} <- object(subject, true) do
+      {:ok, {resource, permission, subject}}
     end
+  end
+
+  defp bulk_item(other) do
+    {:error,
+     Error.new(
+       :invalid_relationship,
+       "expected a map with :resource, :permission, and :subject, got #{inspect(other)}"
+     )}
   end
 
   defp bulk_cached(%{revision: %{cache?: false}}, checks), do: {%{}, checks}
@@ -816,9 +854,18 @@ defmodule Licet do
         {:error, Error.new(:too_many_preconditions, "expected at most #{max} preconditions")}
 
       preconditions ->
-        {:ok, preconditions}
+        case Enum.find_value(preconditions, &precondition_error/1) do
+          nil -> {:ok, preconditions}
+          error -> {:error, error}
+        end
     end
   end
+
+  defp precondition_error({op, filter}) when op in [:must_match, :must_not_match],
+    do: Store.filter_error(filter)
+
+  defp precondition_error(other),
+    do: Error.new(:invalid_filter, "invalid precondition #{inspect(other)}")
 
   defp current_parsed(config) do
     with {:ok, source} <- Store.current_schema(config.repo, config.prefix) do
@@ -875,6 +922,16 @@ defmodule Licet do
     repo
     |> Ecto.Adapter.lookup_meta()
     |> SQL.in_transaction?()
+  end
+
+  # The new schema is published to this node as soon as it is stored, which
+  # would leak an uncommitted schema if the caller's transaction rolled back.
+  defp outside_transaction(repo) do
+    if in_transaction?(repo) do
+      {:error, Error.new(:in_transaction, "write_schema can't run inside an open transaction")}
+    else
+      :ok
+    end
   end
 
   defp store_schema(config, old, parsed, source, metadata) do

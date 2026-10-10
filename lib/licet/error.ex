@@ -26,7 +26,7 @@ defmodule Licet.Error do
   | `:invalid_relationship` | Malformed object or relationship text, a wildcard resource, or a subject or expiration the relation doesn't allow. | Fix the input. The message names the problem. |
   | `:unknown_type` | The object type isn't defined in the schema. | Check the spelling, or add the definition. |
   | `:unknown_relation` | The relation or permission isn't defined on that type. | Check the spelling, or add it to the schema. |
-  | `:invalid_filter` | An empty or malformed filter, subject type, preconditions list, or cursor. | Fix the argument. |
+  | `:invalid_filter` | An empty or malformed filter, subject type, precondition, cursor, or page `:limit`. | Fix the argument. |
   | `:invalid_schema` | The schema doesn't parse or is inconsistent. `details` has `:line` and `:column`. | Fix the schema at that position. |
   | `:invalid_validation_file` | A validation file is malformed. | Fix the YAML. |
   | `:invalid_config` | Invalid instance options or an unknown consistency mode. | Fix the option. |
@@ -40,6 +40,7 @@ defmodule Licet.Error do
   | `:too_many_updates` | More updates than `max_updates` (or `max_import`). | Split the batch. |
   | `:too_many_preconditions` | More preconditions than `max_preconditions`. | Use fewer, broader filters. |
   | `:unsafe_schema_change` | The new schema would strand stored relationships. | Delete those relationships first. See [Operations](operations.md). |
+  | `:in_transaction` | `Licet.write_schema/3` was called inside an open transaction. | Call it outside the transaction. |
 
   ### Queries
 
@@ -72,6 +73,7 @@ defmodule Licet.Error do
           :already_exists
           | :cycle
           | :depth_exceeded
+          | :in_transaction
           | :invalid_config
           | :invalid_filter
           | :invalid_relationship

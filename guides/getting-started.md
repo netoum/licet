@@ -1,17 +1,17 @@
 # Getting started
 
-This guide adds Licet to an existing Phoenix or Ecto application. It assumes you have a working `Ecto.Repo` backed by Postgres 15 or newer. By the end, you'll have a schema, the database tables, a running instance, and your first checks.
+Licet evaluates SpiceDB permission schemas (`.zed` files) inside your Elixir application, with relationships stored in your own Postgres database. This guide adds it to an existing Phoenix or Ecto application. It assumes you have a working `Ecto.Repo` backed by Postgres 15 or newer. By the end, you'll have a schema, the database tables, a running instance, and your first checks.
 
 If the vocabulary is new to you, read [Concepts](concepts.md) first.
 
 ## Install
 
-Add Licet to your dependencies in `mix.exs`. It isn't published to Hex yet, so depend on the repository:
+Add Licet to your dependencies in `mix.exs`:
 
 ```elixir
 def deps do
   [
-    {:licet, github: "netoum/licet"}
+    {:licet, "~> 0.1"}
   ]
 end
 ```

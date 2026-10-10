@@ -15,7 +15,9 @@ defmodule Licet.Relationship do
   A subject written `user:anne#...` is the same as `user:anne`. In the struct,
   `subject_relation` is `""` when the subject has no relation.
 
-  Type and relation names are lowercase, 3 to 64 characters. Ids are 1 to 1024
+  Relation names are lowercase, 3 to 64 characters. Type names follow the same
+  rule, and may be namespaced as `prefix/name`, up to 128 characters in total,
+  as in SpiceDB. Ids are 1 to 1024
   characters from `A-Z`, `a-z`, `0-9`, and `/_|=-+`, or `*` for a wildcard
   subject. Names stay strings; Licet never turns them into atoms.
   """
